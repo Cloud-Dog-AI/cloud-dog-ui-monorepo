@@ -1,0 +1,2 @@
+/* W28A-352E: prevent table overflow clipping Delete buttons */
+#panelGroups .overflow-auto { overflow: visible !important; }

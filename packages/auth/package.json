@@ -1,0 +1,48 @@
+{
+  "name": "@cloud-dog/auth",
+  "description": "Reusable authentication flows, guards, and login surfaces for Cloud-Dog web apps.",
+  "version": "0.2.0",
+  "private": false,
+  "type": "module",
+  "author": "Cloud-Dog, Viewdeck Engineering Limited",
+  "license": "Apache-2.0",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
+  "publishConfig": {
+    "registry": "https://gitea.cloud-dog.net/api/packages/Cloud-Dog-External/npm/",
+    "access": "restricted"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/viewdeck/cloud-dog-ai.git",
+    "directory": "cloud-dog-ai-ui-monorepo/packages/auth"
+  },
+  "homepage": "https://cloud-dog.net",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "@cloud-dog/tokens": "^0.1.0",
+    "@cloud-dog/ui": "^0.1.0",
+    "zod": "^3.23.8"
+  },
+  "peerDependencies": {
+    "@cloud-dog/config": "^0.1.0",
+    "react-router-dom": "^6.26.2"
+  },
+  "devDependencies": {}
+}

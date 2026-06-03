@@ -1,0 +1,46 @@
+{
+  "name": "@cloud-dog/app-imap-mcp",
+  "private": true,
+  "version": "0.0.1",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --port 5178",
+    "build": "vite build",
+    "preview": "vite preview --port 5178",
+    "test": "vitest run src --passWithNoTests",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "ESLINT_USE_FLAT_CONFIG=false eslint .",
+    "e2e": "playwright test",
+    "a11y": "playwright test -g @a11y"
+  },
+  "dependencies": {
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-router-dom": "^6.26.2",
+    "@cloud-dog/shell": "^0.2.0",
+    "@cloud-dog/ui": "^0.3.0",
+    "@cloud-dog/auth": "^0.1.0",
+    "@cloud-dog/api-client": "^0.1.0",
+    "@cloud-dog/config": "^0.1.0",
+    "@cloud-dog/tokens": "^0.1.0",
+    "@cloud-dog/testing": "^0.1.0",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.47.2",
+    "@types/react": "^18.3.3",
+    "@types/react-dom": "^18.3.0",
+    "@typescript-eslint/eslint-plugin": "^8.0.1",
+    "@typescript-eslint/parser": "^8.0.1",
+    "autoprefixer": "^10.4.20",
+    "eslint": "^8.57.0",
+    "eslint-plugin-react-hooks": "^5.1.0",
+    "eslint-plugin-jsx-a11y": "^6.9.0",
+    "postcss": "^8.4.41",
+    "tailwindcss": "^3.4.10",
+    "typescript": "^5.5.4",
+    "vite": "^7.3.1",
+    "@vitejs/plugin-react": "^4.3.2",
+    "vitest": "^3.2.4"
+  }
+}

@@ -1,0 +1,41 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": [
+      "ES2022",
+      "DOM",
+      "DOM.Iterable"
+    ],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "jsx": "react-jsx",
+    "strict": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "resolveJsonModule": true,
+    "baseUrl": ".",
+    "paths": {
+      "@cloud-dog/ui": [
+        "packages/ui/src/index.ts"
+      ],
+      "@cloud-dog/shell": [
+        "packages/shell/src/index.ts"
+      ],
+      "@cloud-dog/auth": [
+        "packages/auth/src/index.ts"
+      ],
+      "@cloud-dog/api-client": [
+        "packages/api-client/src/index.ts"
+      ],
+      "@cloud-dog/testing": [
+        "packages/testing/src/index.ts"
+      ],
+      "@cloud-dog/tokens": [
+        "packages/tokens/src/index.ts"
+      ],
+      "@cloud-dog/config": [
+        "packages/config/src/index.ts"
+      ]
+    }
+  }
+}

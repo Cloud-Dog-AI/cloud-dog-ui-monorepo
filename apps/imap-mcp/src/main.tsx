@@ -1,0 +1,58 @@
+// Copyright 2026 Cloud-Dog, Viewdeck Engineering Limited
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+// @cloud-dog/app-imap-mcp — React entry point.
+
+import * as React from "react";
+import { createRoot } from "react-dom/client";
+import { BrowserRouter } from "react-router-dom";
+import { readRuntimeConfig } from "@cloud-dog/config";
+import "./styles.css";
+import { App } from "./routes/App";
+
+function normaliseUiBasePath(value: unknown): string {
+  if (typeof value !== "string") return "";
+  const trimmed = value.trim();
+  if (!trimmed || trimmed === "/") return "";
+  const prefixed = trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
+  return prefixed.endsWith("/") ? prefixed.slice(0, -1) : prefixed;
+}
+
+const runtimeConfig = (() => {
+  try {
+    return readRuntimeConfig();
+  } catch {
+    return {};
+  }
+})();
+
+const uiBasePath = normaliseUiBasePath(runtimeConfig.UI_BASE_PATH);
+
+if (uiBasePath && typeof window !== "undefined") {
+  const { pathname, search, hash } = window.location;
+  const inUiBase = pathname === uiBasePath || pathname.startsWith(`${uiBasePath}/`);
+  const looksLikeDocumentRoute =
+    pathname === "/" || pathname.endsWith("/") || !pathname.split("/").pop()?.includes(".");
+  if (!inUiBase && looksLikeDocumentRoute) {
+    window.history.replaceState(null, "", `${uiBasePath}${pathname}${search}${hash}`);
+  }
+}
+
+createRoot(document.getElementById("root")!).render(
+  <React.StrictMode>
+    <BrowserRouter basename={uiBasePath || undefined}>
+      <App />
+    </BrowserRouter>
+  </React.StrictMode>
+);
