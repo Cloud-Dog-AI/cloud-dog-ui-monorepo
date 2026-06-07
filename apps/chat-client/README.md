@@ -30,14 +30,14 @@ window.__RUNTIME_CONFIG__ = {
 1. Start backend API (from `chat-client` repo):
 
 ```bash
-cd /opt/iac/Development/cloud-dog-ai/chat-client
+cd <your-workspace>/chat-client
 PYTHONPATH=src python3 -m cloud_dog_chat_client.cli api --env private/env-at1-14-search-news-hungarian-bridge
 ```
 
 2. Start UI app (from monorepo root):
 
 ```bash
-cd /opt/iac/Development/cloud-dog-ai-ui-monorepo
+cd <your-workspace>/cloud-dog-ui-monorepo
 CHAT_CLIENT_API_PROXY_TARGET=http://127.0.0.1:8090 npm run dev --workspace @cloud-dog/app-chat-client
 ```
 
