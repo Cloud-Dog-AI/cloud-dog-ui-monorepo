@@ -20,7 +20,7 @@
     }
   },
   "publishConfig": {
-    "registry": "https://gitea.cloud-dog.net/api/packages/Cloud-Dog-External/npm/",
+    "registry": "https://registry.npmjs.org/",
     "access": "restricted"
   },
   "repository": {

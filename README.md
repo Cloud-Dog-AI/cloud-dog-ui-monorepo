@@ -34,7 +34,7 @@ npm install
 
 ## Internal registry
 `@cloud-dog/*` scope is configured to resolve/publish through:
-- `https://gitea.cloud-dog.net/api/packages/Cloud-Dog-External/npm/` (see `.npmrc`)
+- `https://registry.npmjs.org/` (see `.npmrc`)
 
 Apps in `apps/*` remain private and are deployed as application artefacts, not shared libraries.
 
