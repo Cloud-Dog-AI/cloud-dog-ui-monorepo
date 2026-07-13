@@ -16,6 +16,7 @@ import * as React from "react";
 import { useAuth } from "@cloud-dog/auth";
 import { useParams } from "react-router-dom";
 import {
+  ActionableError,
   Button,
   Card,
   CardContent,
@@ -26,16 +27,20 @@ import {
   Label,
   Select,
   Textarea,
+  createDataTableActionColumn,
   type DataColumn,
   type EntityFieldDef,
+  type SavedQueryOption,
+  SavedQueryControls,
 } from "@cloud-dog/ui";
+import { exportRowsJson } from "../lib/exportRows";
 import { ProfileSelect } from "../components/ProfileSelect";
 import { FilterBuilder } from "../components/FilterBuilder";
 import { JsonPanel } from "../components/JsonPanel";
 import { canCreateOrUpdateData, canDeleteData } from "../lib/access";
 import { buildFilterPayload, emptyFilterCondition } from "../lib/filter";
 import { useDbMcpState } from "../state/AppState";
-import type { EntityItem, FilterGroupDraft, NamespaceItem } from "../lib/types";
+import type { EntityItem, FilterGroupDraft, NamespaceItem, SavedQuerySummary } from "../lib/types";
 
 const EMPTY_FILTER: FilterGroupDraft = {
   op: "and",
@@ -83,18 +88,28 @@ function deriveRowFilter(row: Record<string, unknown>): Record<string, unknown> 
   return {};
 }
 
+function profileAllowsDataMutation(profile: { allowed_permissions?: string[] } | null | undefined): boolean {
+  const permissions = profile?.allowed_permissions ?? [];
+  return permissions.includes("*") || permissions.some((permission) => ["data.create", "data.update", "data.delete"].includes(permission));
+}
+
 export function DataBrowserPage() {
   const auth = useAuth();
-  const { ns = "", entity = "" } = useParams();
+  const { profileId = "", ns = "", entity = "" } = useParams();
+  const routeProfileId = decodeURIComponent(profileId);
   const routeNamespace = decodeURIComponent(ns);
   const routeEntity = decodeURIComponent(entity);
-  const { api, currentProfile } = useDbMcpState();
+  const { api, currentProfile, setSelectedProfileId } = useDbMcpState();
   const [namespaces, setNamespaces] = React.useState<NamespaceItem[]>([]);
   const [entities, setEntities] = React.useState<EntityItem[]>([]);
   const [activeNamespace, setActiveNamespace] = React.useState(routeNamespace);
   const [activeEntity, setActiveEntity] = React.useState(routeEntity);
   const [limit, setLimit] = React.useState("10");
   const [filter, setFilter] = React.useState<FilterGroupDraft>(EMPTY_FILTER);
+  const [savedQueries, setSavedQueries] = React.useState<SavedQuerySummary[]>([]);
+  const [selectedSavedQueryId, setSelectedSavedQueryId] = React.useState("");
+  const [queryDraftName, setQueryDraftName] = React.useState("");
+  const [savedQueriesLoading, setSavedQueriesLoading] = React.useState(false);
   const [rows, setRows] = React.useState<Array<Record<string, unknown>>>([]);
   const [count, setCount] = React.useState<number | null>(null);
   const [page, setPage] = React.useState(1);
@@ -112,10 +127,17 @@ export function DataBrowserPage() {
   const [status, setStatus] = React.useState("");
   const [error, setError] = React.useState<string | null>(null);
 
-  const mayCreateOrUpdateData = canCreateOrUpdateData(auth.user);
-  const mayDeleteData = canDeleteData(auth.user);
+  const profileAllowsWrites = profileAllowsDataMutation(currentProfile);
+  const mayCreateOrUpdateData = canCreateOrUpdateData(auth.user) && profileAllowsWrites;
+  const mayDeleteData = canDeleteData(auth.user) && profileAllowsWrites;
   const filterPayload = React.useMemo(() => buildFilterPayload(filter), [filter]);
-  const fieldMasks = currentProfile?.field_masks ?? {};
+  const fieldMasks = React.useMemo(() => currentProfile?.field_masks ?? {}, [currentProfile?.field_masks]);
+
+  React.useEffect(() => {
+    if (routeProfileId) {
+      setSelectedProfileId(routeProfileId);
+    }
+  }, [routeProfileId, setSelectedProfileId]);
 
   React.useEffect(() => {
     setActiveNamespace(routeNamespace);
@@ -185,6 +207,111 @@ export function DataBrowserPage() {
     void execute();
   }, [execute]);
 
+  const loadSavedQueries = React.useCallback(async () => {
+    setSavedQueriesLoading(true);
+    try {
+      const items = await api.listSavedQueries("data-browser");
+      setSavedQueries(items);
+    } catch (loadError) {
+      setError(loadError instanceof Error ? loadError.message : "Failed to load saved queries.");
+    } finally {
+      setSavedQueriesLoading(false);
+    }
+  }, [api]);
+
+  React.useEffect(() => {
+    void loadSavedQueries();
+  }, [loadSavedQueries]);
+
+  const savedQueryOptions = React.useMemo<SavedQueryOption[]>(
+    () =>
+      savedQueries.map((query) => ({
+        id: String(query.id),
+        name: query.name,
+        description: query.description,
+        shared: query.shared,
+      })),
+    [savedQueries]
+  );
+
+  const saveQuery = React.useCallback(async () => {
+    const name = queryDraftName.trim();
+    if (!name) {
+      setError("Query name is required.");
+      return;
+    }
+    if (!currentProfile || !activeNamespace || !activeEntity) {
+      setError("Select a profile, namespace and entity before saving a query.");
+      return;
+    }
+    try {
+      const saved = await api.createSavedQuery({
+        page_key: "data-browser",
+        name,
+        payload: {
+          profile_id: currentProfile.profile_id,
+          namespace: activeNamespace,
+          entity: activeEntity,
+          limit,
+          filter,
+        },
+        description: "",
+        shared: false,
+      });
+      setSelectedSavedQueryId(String(saved.id));
+      setStatus(`Saved query ${name}.`);
+      setError(null);
+      await loadSavedQueries();
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : "Failed to save query.");
+    }
+  }, [activeEntity, activeNamespace, api, currentProfile, filter, limit, loadSavedQueries, queryDraftName]);
+
+  const selectSavedQuery = React.useCallback(
+    (option: SavedQueryOption | null) => {
+      setSelectedSavedQueryId(option?.id ?? "");
+      if (!option) return;
+      const saved = savedQueries.find((query) => String(query.id) === option.id);
+      if (!saved) return;
+      const payload = saved.payload;
+      if (typeof payload.profile_id === "string" && payload.profile_id.trim()) {
+        setSelectedProfileId(payload.profile_id);
+      }
+      if (typeof payload.namespace === "string") {
+        setActiveNamespace(payload.namespace);
+      }
+      if (typeof payload.entity === "string") {
+        setActiveEntity(payload.entity);
+      }
+      if (typeof payload.limit === "string" || typeof payload.limit === "number") {
+        setLimit(String(payload.limit));
+      }
+      if (payload.filter && typeof payload.filter === "object" && !Array.isArray(payload.filter)) {
+        setFilter(payload.filter as FilterGroupDraft);
+      }
+      setQueryDraftName(saved.name);
+      setStatus(`Loaded saved query ${saved.name}.`);
+      setError(null);
+    },
+    [savedQueries, setSelectedProfileId]
+  );
+
+  const deleteSavedQuery = React.useCallback(
+    async (option: SavedQueryOption) => {
+      try {
+        await api.deleteSavedQuery(Number(option.id));
+        setSelectedSavedQueryId("");
+        setQueryDraftName("");
+        setStatus(`Deleted saved query ${option.name}.`);
+        setError(null);
+        await loadSavedQueries();
+      } catch (deleteError) {
+        setError(deleteError instanceof Error ? deleteError.message : "Failed to delete saved query.");
+      }
+    },
+    [api, loadSavedQueries]
+  );
+
   const visibleRows = React.useMemo(() => {
     const hiddenFields = new Set(currentProfile?.field_exclusions ?? []);
     return rows.map((row, index) => {
@@ -223,37 +350,35 @@ export function DataBrowserPage() {
       sortable: true,
       sortValue: (row) => formatCellValue(row[key]),
     }));
+    const findRawRow = (row: Record<string, unknown>) =>
+      rows.find((item, index) => String(item._id ?? item.id ?? index + 1) === row.__row_id) ?? null;
     return [
       ...baseColumns,
-      {
-        id: "actions",
-        header: "Actions",
-        cell: (row) => {
-          const rawRow = rows.find((item, index) => String(item._id ?? item.id ?? index + 1) === row.__row_id) ?? null;
-          return (
-            <div className="flex flex-wrap gap-2">
-              <Button
-                size="sm"
-                variant="secondary"
-                onClick={() => {
-                  setSelectedRow(rawRow);
-                  setMutationMode("view");
-                  setMutationForm({
-                    namespace: activeNamespace,
-                    entity: activeEntity,
-                    documentJson: JSON.stringify(rawRow ?? {}, null, 2),
-                    filterJson: JSON.stringify(deriveRowFilter(rawRow ?? {}), null, 2),
-                    updateJson: JSON.stringify({ "$set": rawRow ?? {} }, null, 2),
-                  });
-                  setMutationOpen(true);
-                }}
-              >
-                View
-              </Button>
-              {mayCreateOrUpdateData ? (
-                <Button
-                  size="sm"
-                  onClick={() => {
+      createDataTableActionColumn<Record<string, unknown>>((row) => {
+        const rawRow = findRawRow(row);
+        return [
+          {
+            id: "view",
+            label: "View",
+            onClick: () => {
+              setSelectedRow(rawRow);
+              setMutationMode("view");
+              setMutationForm({
+                namespace: activeNamespace,
+                entity: activeEntity,
+                documentJson: JSON.stringify(rawRow ?? {}, null, 2),
+                filterJson: JSON.stringify(deriveRowFilter(rawRow ?? {}), null, 2),
+                updateJson: JSON.stringify({ "$set": rawRow ?? {} }, null, 2),
+              });
+              setMutationOpen(true);
+            },
+          },
+          ...(mayCreateOrUpdateData
+            ? [
+                {
+                  id: "update",
+                  label: "Update",
+                  onClick: () => {
                     setSelectedRow(rawRow);
                     setMutationMode("update");
                     setMutationForm({
@@ -264,16 +389,17 @@ export function DataBrowserPage() {
                       updateJson: JSON.stringify({ "$set": rawRow ?? {} }, null, 2),
                     });
                     setMutationOpen(true);
-                  }}
-                >
-                  Update
-                </Button>
-              ) : null}
-              {mayDeleteData ? (
-                <Button
-                  size="sm"
-                  variant="destructive"
-                  onClick={() => {
+                  },
+                },
+              ]
+            : []),
+          ...(mayDeleteData
+            ? [
+                {
+                  id: "delete",
+                  label: "Delete",
+                  destructive: true,
+                  onClick: () => {
                     setSelectedRow(rawRow);
                     setMutationMode("delete");
                     setMutationForm({
@@ -284,15 +410,12 @@ export function DataBrowserPage() {
                       updateJson: JSON.stringify({ "$set": {} }, null, 2),
                     });
                     setMutationOpen(true);
-                  }}
-                >
-                  Delete
-                </Button>
-              ) : null}
-            </div>
-          );
-        },
-      },
+                  },
+                },
+              ]
+            : []),
+        ];
+      }),
     ];
   }, [activeEntity, activeNamespace, fieldMasks, firstMaskedRowIdByKey, mayCreateOrUpdateData, mayDeleteData, rows, visibleRows]);
   const resultsTableId = React.useMemo(
@@ -363,12 +486,21 @@ export function DataBrowserPage() {
     <div className="space-y-6">
       <header className="space-y-2">
         <h1 className="text-2xl font-semibold">Data Browser</h1>
-        <p className="text-sm text-muted-foreground">
-          {activeNamespace && activeEntity ? `${activeNamespace}.${activeEntity}` : "Select a namespace and entity"}
+        <p className="text-sm text-muted-foreground" aria-label="Data Browser scope">
+          {currentProfile && activeNamespace && activeEntity
+            ? `${currentProfile.profile_id} / ${activeNamespace} / ${activeEntity}`
+            : "Select a profile, namespace and entity"}
         </p>
       </header>
-      {!mayCreateOrUpdateData ? (
-        <p className="text-sm text-muted-foreground">This session is read-only. Data create/update/delete actions require the corresponding data permissions.</p>
+      {!mayCreateOrUpdateData && currentProfile ? (
+        <ActionableError
+          title="Read-only profile"
+          message="This session can read data but cannot create, update or delete records. Grant data.create, data.update or data.delete before running write actions."
+          action={{
+            href: `/admin/profiles?profile_id=${encodeURIComponent(currentProfile.profile_id)}&focus=permissions`,
+            label: "Edit profile permissions",
+          }}
+        />
       ) : null}
       {error ? <p role="alert" className="text-sm text-destructive">{error}</p> : null}
       {status ? <p role="status" className="text-sm text-foreground/80">{status}</p> : null}
@@ -401,6 +533,17 @@ export function DataBrowserPage() {
       <Card>
         <CardHeader><h2 className="text-lg font-semibold">Structured filter builder</h2></CardHeader>
         <CardContent className="space-y-4">
+          <SavedQueryControls
+            queries={savedQueryOptions}
+            selectedId={selectedSavedQueryId}
+            draftName={queryDraftName}
+            onDraftNameChange={setQueryDraftName}
+            onSelect={selectSavedQuery}
+            onSave={() => void saveQuery()}
+            onDelete={(query) => void deleteSavedQuery(query)}
+            loading={savedQueriesLoading}
+            disabled={!currentProfile || !activeNamespace || !activeEntity}
+          />
           <div className="flex flex-wrap items-center gap-2">
             <Button size="sm" onClick={() => void execute()} data-testid="data-run-query">Execute query</Button>
             <Button size="sm" variant="secondary" onClick={() => setFilter({ op: "and", conditions: [emptyFilterCondition()] })}>Reset filter</Button>
@@ -421,6 +564,7 @@ export function DataBrowserPage() {
           </p>
           <DataTable
             key={resultsTableKey}
+            ariaLabel="Data Browser results"
             columns={dataColumns}
             rows={visibleRows}
             emptyMessage="No rows returned."
@@ -435,13 +579,7 @@ export function DataBrowserPage() {
             onBulkAction={(action, selectedIds) => {
               if (action === "export") {
                 const selected = visibleRows.filter((row) => selectedIds.includes(String(row.__row_id)));
-                const blob = new Blob([JSON.stringify(selected, null, 2)], { type: "application/json" });
-                const url = URL.createObjectURL(blob);
-                const a = document.createElement("a");
-                a.href = url;
-                a.download = `data-export-${new Date().toISOString().slice(0, 10)}.json`;
-                a.click();
-                URL.revokeObjectURL(url);
+                exportRowsJson(selected, `data-export-${new Date().toISOString().slice(0, 10)}.json`);
               } else if (action === "delete" && currentProfile) {
                 void Promise.all(
                   selectedIds.map((rowId) => {

@@ -16,11 +16,13 @@
 // Covers: UI-R11, UI-R25. Consolidated from chat-client, expert-agent, notification-agent.
 
 import * as React from 'react';
+import { Download } from 'lucide-react';
 import { Button } from '../components/button/Button';
 import { Card, CardContent, CardHeader } from '../components/card/Card';
 import { DataTable } from '../components/table/DataTable';
 import { Input } from '../components/input/Input';
 import { Select } from '../components/input/Select';
+import { Switch } from '../components/input/Switch';
 import { StructuredView } from './StructuredView';
 import { RelativeTime } from './RelativeTime';
 import type { DataColumn } from '../components/table/DataTable';
@@ -40,6 +42,8 @@ export type AuditLogEntry = {
   message?: string | null;
   trace_id?: string | null;
   request_id?: string | null;
+  session_id?: string | null;
+  correlation_id?: string | null;
   service?: string | null;
   service_instance?: string | null;
   environment?: string | null;
@@ -84,11 +88,19 @@ export type LogTablePanelProps = Readonly<{
   title: string;
   description: string;
   initialSurface?: string;
+  initialQuery?: string;
   limit?: number;
   embedded?: boolean;
   defaultVisibleColumns?: string[];
   refreshInterval?: number;
   followTailDefault?: boolean;
+  searchPlaceholder?: string;
+  extraColumns?: DataColumn<AuditLogEntry>[];
+  extraSearchText?: (row: AuditLogEntry) => string;
+  exportFilenamePrefix?: string;
+  enableJsonExport?: boolean;
+  enableCsvExport?: boolean;
+  enableSelectedExport?: boolean;
 }>;
 
 // ---------------------------------------------------------------------------
@@ -155,6 +167,48 @@ function searchText(row: AuditLogEntry): string {
     .toLowerCase();
 }
 
+function csvCell(value: unknown): string {
+  const str = value == null ? '' : String(value);
+  return str.includes(',') || str.includes('"') || str.includes('\n') ? `"${str.replace(/"/g, '""')}"` : str;
+}
+
+function exportRows(filename: string, rows: AuditLogEntry[], format: 'json' | 'csv'): void {
+  if (!rows.length) return;
+  let content: string;
+  let mime: string;
+  if (format === 'json') {
+    content = JSON.stringify(rows, null, 2);
+    mime = 'application/json';
+  } else {
+    const headers = [
+      'timestamp', 'event_type', 'action', 'outcome', 'severity', 'level',
+      'actor_type', 'actor_id', 'actor_ip', 'actor_roles', 'target_type',
+      'target_id', 'target_name', 'trace_id', 'request_id', 'service',
+      'service_instance', 'environment', 'surface', 'message', 'details',
+    ];
+    const csvRows = rows.map((row) => headers.map((header) => {
+      if (header === 'actor_type') return csvCell(row.actor?.type);
+      if (header === 'actor_id') return csvCell(row.actor?.id);
+      if (header === 'actor_ip') return csvCell(row.actor?.ip);
+      if (header === 'actor_roles') return csvCell(row.actor?.roles?.join(' '));
+      if (header === 'target_type') return csvCell(row.target?.type);
+      if (header === 'target_id') return csvCell(row.target?.id);
+      if (header === 'target_name') return csvCell(row.target?.name);
+      if (header === 'details') return csvCell(row.details ? JSON.stringify(row.details) : '');
+      return csvCell((row as Record<string, unknown>)[header]);
+    }).join(','));
+    content = [headers.join(','), ...csvRows].join('\n');
+    mime = 'text/csv';
+  }
+  const blob = new Blob([content], { type: mime });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
 // ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
@@ -166,11 +220,19 @@ export function LogTablePanel(props: LogTablePanelProps) {
     title,
     description,
     initialSurface = 'audit',
+    initialQuery = '',
     limit = 100,
     embedded = false,
     defaultVisibleColumns = DEFAULT_VISIBLE_COLUMNS,
     refreshInterval = 30_000,
     followTailDefault = true,
+    searchPlaceholder = 'Filter by actor, action, target, trace ID, request ID, or message',
+    extraColumns = [],
+    extraSearchText,
+    exportFilenamePrefix = tableId,
+    enableJsonExport = true,
+    enableCsvExport = true,
+    enableSelectedExport = true,
   } = props;
 
   const [surface, setSurface] = React.useState(initialSurface);
@@ -180,12 +242,11 @@ export function LogTablePanel(props: LogTablePanelProps) {
   const [status, setStatus] = React.useState<string | null>(null);
   const [page, setPage] = React.useState(1);
   const [pageSize, setPageSize] = React.useState(limit <= 10 ? limit : 25);
-  const [query, setQuery] = React.useState('');
+  const [query, setQuery] = React.useState(initialQuery);
   const deferredQuery = React.useDeferredValue(query);
   const [followTail, setFollowTail] = React.useState(followTailDefault);
   const [lastRefreshAt, setLastRefreshAt] = React.useState<string | null>(null);
   const [selectedEntry, setSelectedEntry] = React.useState<AuditLogEntry | null>(null);
-  const [hiddenIds, setHiddenIds] = React.useState<Set<string>>(new Set());
   const [tableReady, setTableReady] = React.useState(typeof window === 'undefined');
 
   React.useEffect(() => {
@@ -204,6 +265,10 @@ export function LogTablePanel(props: LogTablePanelProps) {
     setTableReady(true);
   }, [defaultVisibleColumns, tableId]);
 
+  React.useEffect(() => {
+    setQuery(initialQuery);
+  }, [initialQuery]);
+
   const refresh = React.useCallback(async () => {
     setLoading(true);
     setError(null);
@@ -214,7 +279,6 @@ export function LogTablePanel(props: LogTablePanelProps) {
         query: deferredQuery.trim() || undefined,
       });
       setPayload(next);
-      setHiddenIds(new Set());
       setStatus(
         `Loaded ${next.count} ${next.surface_label ?? surface.toUpperCase()} entries from ${next.source_path ?? 'configured source'}.`
       );
@@ -248,25 +312,14 @@ export function LogTablePanel(props: LogTablePanelProps) {
   const rows = React.useMemo(() => {
     const needle = deferredQuery.trim().toLowerCase();
     return (payload?.entries ?? []).filter((row) => {
-      if (hiddenIds.has(row.id)) return false;
       if (!needle) return true;
-      return searchText(row).includes(needle);
+      const extraText = extraSearchText?.(row) ?? '';
+      return `${searchText(row)} ${extraText}`.toLowerCase().includes(needle);
     });
-  }, [deferredQuery, hiddenIds, payload?.entries]);
+  }, [deferredQuery, extraSearchText, payload?.entries]);
 
-  const handleBulkAction = React.useCallback((_action: string, selectedIds: string[]) => {
-    if (_action !== 'delete' || !selectedIds.length) return;
-    const selectedSet = new Set(selectedIds);
-    setHiddenIds((previous) => {
-      const next = new Set(previous);
-      for (const id of selectedSet) next.add(id);
-      return next;
-    });
-    setSelectedEntry((current) => (current && selectedSet.has(current.id) ? null : current));
-    setStatus(`Removed ${selectedIds.length} selected rows from the current view. Refresh to reload from disk.`);
-  }, []);
-
-  const columns = React.useMemo<DataColumn<AuditLogEntry>[]>(() => [
+  const columns = React.useMemo<DataColumn<AuditLogEntry>[]>(() => {
+    const baseColumns: DataColumn<AuditLogEntry>[] = [
     { id: 'who', header: 'Who', sortable: true, sortValue: (row) => `${row.actor?.type ?? ''}:${row.actor?.id ?? ''}`, cell: (row) => <span className="font-mono text-xs">{formatActor(row.actor)}</span> },
     { id: 'from', header: 'From', sortable: true, sortValue: (row) => row.actor?.ip ?? '', cell: (row) => <span className="font-mono text-xs">{row.actor?.ip ?? 'N/A'}</span> },
     { id: 'eventType', header: 'Event Type', sortable: true, sortValue: (row) => row.event_type ?? '', cell: (row) => row.event_type ?? 'N/A' },
@@ -277,6 +330,8 @@ export function LogTablePanel(props: LogTablePanelProps) {
     { id: 'timestamp', header: 'Timestamp', sortable: true, sortValue: (row) => row.timestamp ?? '', cell: (row) => <RelativeTime timestamp={row.timestamp ?? ''} className="font-mono text-xs" /> },
     { id: 'traceId', header: 'Trace ID', sortable: true, sortValue: (row) => row.trace_id ?? '', cell: (row) => <span className="font-mono text-xs break-all">{row.trace_id ?? 'N/A'}</span> },
     { id: 'requestId', header: 'Request ID', sortable: true, sortValue: (row) => row.request_id ?? '', cell: (row) => <span className="font-mono text-xs break-all">{row.request_id ?? 'N/A'}</span> },
+    { id: 'session', header: 'Session ID', sortable: true, sortValue: (row) => row.session_id ?? '', cell: (row) => <span className="font-mono text-xs break-all">{row.session_id ?? 'N/A'}</span> },
+    { id: 'correlation', header: 'Correlation ID', sortable: true, sortValue: (row) => row.correlation_id ?? '', cell: (row) => <span className="font-mono text-xs break-all">{row.correlation_id ?? 'N/A'}</span> },
     { id: 'service', header: 'Service', sortable: true, sortValue: (row) => `${row.service ?? ''}:${row.service_instance ?? ''}`, cell: (row) => <span className="font-mono text-xs">{formatService(row)}</span> },
     { id: 'actorRoles', header: 'Actor Roles', sortable: true, sortValue: (row) => row.actor?.roles?.join(',') ?? '', cell: (row) => row.actor?.roles?.length ? row.actor.roles.join(', ') : 'N/A' },
     { id: 'userAgent', header: 'User Agent', sortable: true, sortValue: (row) => row.actor?.user_agent ?? '', cell: (row) => <span className="font-mono text-xs break-all">{row.actor?.user_agent ?? 'N/A'}</span> },
@@ -285,10 +340,21 @@ export function LogTablePanel(props: LogTablePanelProps) {
     { id: 'message', header: 'Message', sortable: true, sortValue: (row) => row.message ?? '', cell: (row) => <span className="font-mono text-xs break-all">{row.message ?? 'N/A'}</span> },
     { id: 'source', header: 'Source', sortable: true, sortValue: (row) => row.surface_label ?? row.surface, cell: (row) => row.surface_label ?? row.surface.toUpperCase() },
     { id: 'environment', header: 'Environment', sortable: true, sortValue: (row) => row.environment ?? '', cell: (row) => row.environment ?? 'N/A' },
+    ...extraColumns,
     { id: 'inspect', header: 'Inspect', cell: (row) => <Button type="button" size="sm" variant="secondary" onClick={() => setSelectedEntry(row)}>View</Button> },
-  ], []);
+    ];
+    return baseColumns;
+  }, [extraColumns]);
 
   const refreshSeconds = Math.round(refreshInterval / 1000);
+  const timestampSuffix = React.useCallback(() => new Date().toISOString().replace(/[:.]/g, '-'), []);
+  const handleExport = React.useCallback((format: 'json' | 'csv', selectedIds?: string[]) => {
+    const selected = selectedIds?.length
+      ? rows.filter((row) => selectedIds.includes(row.id))
+      : rows;
+    exportRows(`${exportFilenamePrefix}-${surface}-logs-${timestampSuffix()}.${format}`, selected, format);
+    setStatus(`Exported ${selected.length} ${surface.toUpperCase()} log entr${selected.length === 1 ? 'y' : 'ies'} as ${format.toUpperCase()}.`);
+  }, [exportFilenamePrefix, rows, surface, timestampSuffix]);
 
   const body = (
     <div className="space-y-4">
@@ -313,14 +379,27 @@ export function LogTablePanel(props: LogTablePanelProps) {
             aria-label="Search logs"
             value={query}
             onChange={(event) => setQuery(event.target.value)}
-            placeholder="Filter by actor, action, target, trace ID, request ID, or message"
+            placeholder={searchPlaceholder}
+            data-testid="logs-search-input"
           />
         </label>
 
+        <div className="flex items-center gap-2 text-sm">
+          <Switch checked={followTail} onCheckedChange={setFollowTail} aria-label="Auto-refresh" />
+          <span className="text-muted-foreground">Auto-refresh</span>
+        </div>
+
         <Button type="button" variant="secondary" onClick={() => void refresh()}>Refresh</Button>
-        <Button type="button" variant={followTail ? 'secondary' : 'default'} onClick={() => setFollowTail((c) => !c)}>
-          {followTail ? 'Pause tail' : 'Follow tail'}
-        </Button>
+        {enableJsonExport ? (
+          <Button type="button" variant="secondary" onClick={() => handleExport('json')} disabled={!rows.length}>
+            <Download className="mr-1 h-4 w-4" /> JSON
+          </Button>
+        ) : null}
+        {enableCsvExport ? (
+          <Button type="button" variant="secondary" onClick={() => handleExport('csv')} disabled={!rows.length}>
+            <Download className="mr-1 h-4 w-4" /> CSV
+          </Button>
+        ) : null}
       </div>
 
       <div className="space-y-1 text-sm text-muted-foreground">
@@ -339,14 +418,17 @@ export function LogTablePanel(props: LogTablePanelProps) {
           columns={columns}
           rows={rows}
           getRowId={(row) => row.id}
+          totalRows={rows.length}
           emptyMessage={error ? 'Log feed unavailable.' : 'No log entries match the current filter.'}
           page={page}
           onPageChange={setPage}
           pageSize={pageSize}
           onPageSizeChange={setPageSize}
-          selectable={true}
-          bulkActions={[{ label: 'Delete selected', action: 'delete' }]}
-          onBulkAction={handleBulkAction}
+          selectable={enableSelectedExport}
+          bulkActions={enableSelectedExport ? [{ label: 'Export selected', action: 'export' }] : []}
+          onBulkAction={(action, selectedIds) => {
+            if (action === 'export') handleExport('json', selectedIds);
+          }}
           columnPickerEnabled={true}
         />
       ) : null}

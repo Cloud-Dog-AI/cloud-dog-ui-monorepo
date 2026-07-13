@@ -29,42 +29,56 @@ export interface ShellLayoutProps {
   userMenu?: UserMenuConfig;
   breadcrumbs?: BreadcrumbItem[];
   children: React.ReactNode;
+  footer?: React.ReactNode;
   preset?: ShellPreset;
   showNav?: boolean;
   homePath?: string;
   onHomeNavigate?: (path: string) => void;
+  testIdPrefix?: string;
 }
 
 export function ShellLayout(props: ShellLayoutProps) {
   const showNav = props.showNav ?? true;
+  const testIdPrefix = props.testIdPrefix ?? "cloud-dog-shell";
   return (
     <ShellProvider>
       <SkipLink />
-      <header>
+      <header data-testid={`${testIdPrefix}-top-bar`}>
         <TopBar
           appName={props.appName}
           userMenu={props.userMenu}
           breadcrumbs={props.breadcrumbs}
           homePath={props.homePath}
           onHomeNavigate={props.onHomeNavigate}
+          testIdPrefix={testIdPrefix}
         />
       </header>
 
       {showNav ? (
-        <div className="grid grid-cols-[auto_1fr] md:grid-cols-[auto_1fr]">
-          <nav aria-label="Main navigation" className="hidden md:block">
-            <LeftNav items={props.navItems} width={props.preset?.leftNavWidth} />
+        <div className="grid grid-cols-1 md:grid-cols-[auto_minmax(0,1fr)]" data-testid={`${testIdPrefix}-layout`}>
+          <nav aria-label="Main navigation" className="hidden md:block" data-testid={`${testIdPrefix}-left-nav`}>
+            <LeftNav items={props.navItems} width={props.preset?.leftNavWidth} testIdPrefix={testIdPrefix} />
           </nav>
 
-          <MobileDrawer items={props.navItems} />
+          <MobileDrawer items={props.navItems} testIdPrefix={testIdPrefix} />
 
-          <main id="main-content" className="min-h-[calc(100vh-3.5rem)] bg-muted/10">
+          <main
+            id="main-content"
+            className="min-w-0 min-h-[calc(100vh-3.5rem)] bg-muted/10"
+            data-testid={`${testIdPrefix}-main`}
+          >
             <div className={props.preset?.contentClassName ?? "p-6"}>{props.children}</div>
+            {props.footer ? <div data-testid={`${testIdPrefix}-footer`}>{props.footer}</div> : null}
           </main>
         </div>
       ) : (
-        <main id="main-content" className="min-h-[calc(100vh-3.5rem)] bg-muted/10">
+        <main
+          id="main-content"
+          className="min-w-0 min-h-[calc(100vh-3.5rem)] bg-muted/10"
+          data-testid={`${testIdPrefix}-main`}
+        >
           <div className={props.preset?.contentClassName ?? "p-6"}>{props.children}</div>
+          {props.footer ? <div data-testid={`${testIdPrefix}-footer`}>{props.footer}</div> : null}
         </main>
       )}
     </ShellProvider>

@@ -22,12 +22,13 @@ import {
   CardContent,
   CardHeader,
   DataTable,
+  DiagnosticsHealthPanel,
   EntityDialog,
   Input,
-  ResourceMetrics,
   Select,
   StructuredView,
   type DataColumn,
+  type DiagnosticsHealthItem,
   type MetricItem,
 } from "@cloud-dog/ui";
 import type { ServerLogRow, TraceEvent } from "../lib/types";
@@ -88,7 +89,7 @@ const traceColumns: DataColumn<TraceEvent>[] = [
 
 function TraceLogTable(props: { traces: TraceEvent[] }) {
   return (
-    <div className="w-full overflow-auto">
+    <div className="w-full overflow-auto" role="region" aria-label="Trace log table scroll area" tabIndex={0}>
       <table aria-label="Trace log" className="w-full text-sm">
         <thead className="border-b">
           <tr className="border-b hover:bg-muted/40">
@@ -171,6 +172,9 @@ export function DiagnosticsAuditPage() {
   }, [urlFilter]);
   const deferredQuery = React.useDeferredValue(query);
   const [metrics, setMetrics] = React.useState<MetricItem[]>(flattenMetrics({}));
+  // PS-WEBUI-STYLE-COMPONENTS §10 / W28E-1851 (STD-F16): service health for the
+  // diagnostics panel (ok/warning/error/unknown), derived from the status probe.
+  const [health, setHealth] = React.useState<DiagnosticsHealthItem[]>([{ name: "API", status: "unknown" }]);
   const [selectedRow, setSelectedRow] = React.useState<ServerLogRow | null>(null);
   const [error, setError] = React.useState("");
   const [status, setStatus] = React.useState("");
@@ -224,6 +228,11 @@ export function DiagnosticsAuditPage() {
     if (statusResult.ok && statusResult.data) {
       setMetrics(flattenMetrics(statusResult.data));
     }
+    setHealth([
+      statusResult.ok
+        ? { name: "API", status: "ok" }
+        : { name: "API", status: "error", detail: "Status probe failed" },
+    ]);
   }, [activeType, api, deferredQuery]);
 
   React.useEffect(() => {
@@ -376,6 +385,20 @@ export function DiagnosticsAuditPage() {
 
       {error ? <p role="alert" className="text-sm text-destructive">{error}</p> : null}
 
+      {/* PS-WEBUI-STYLE-COMPONENTS §10 / W28E-1851 (STD-F16): diagnostics / health /
+          resource-metrics panel above the audit/trace tables. The service-specific
+          trace log and MCP search/failure probes remain below (no-loss). */}
+      <DiagnosticsHealthPanel
+        title="System diagnostics"
+        description="Live resource metrics and service health for the IMAP MCP service."
+        metricsUrl="/status"
+        metricsIntervalMs={30000}
+        fallbackMetrics={metrics}
+        health={health}
+        error={error || null}
+        onRefresh={() => void load()}
+      />
+
       <Card>
         <CardHeader className="flex flex-row items-center justify-between">
           <div className="space-y-1">
@@ -427,7 +450,9 @@ export function DiagnosticsAuditPage() {
           </div>
 
           {tableReady ? (
-            <div className="w-full overflow-x-auto">
+            <div className="w-full overflow-x-auto max-h-[60vh]">
+              {/* IMAP-380: max-h to keep audit table sized to viewport. */}
+              {/* IMAP-381: multi-select + bulk export. */}
               <DataTable
                 columns={columns}
                 rows={rows}
@@ -439,6 +464,13 @@ export function DiagnosticsAuditPage() {
                 onPageSizeChange={setPageSize}
                 columnPickerEnabled
                 tableId="imap-audit-log"
+                selectable
+                bulkActions={[{ label: "Export selected", action: "export" }]}
+                onBulkAction={(action, ids) => {
+                  if (action !== "export") return;
+                  const selected = rows.filter((r) => ids.includes(r.id));
+                  downloadJson(`imap-${activeType}-selected.json`, selected);
+                }}
               />
             </div>
           ) : null}

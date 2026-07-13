@@ -88,7 +88,6 @@ export function ApiKeysPage() {
   }, [api, captureFailure, clearFailure, form, refresh]);
 
   const revokeKey = React.useCallback(async (apiKey: ApiKeyRecord) => {
-    if (!window.confirm(`Revoke API key ${apiKey.name ?? apiKey.id}?`)) return;
     clearFailure();
     try {
       await api.revokeApiKey(apiKey.id);
@@ -137,7 +136,7 @@ export function ApiKeysPage() {
           statusColumn<ApiKeyRecord>({ getValue: (apiKey) => apiKey.revoked ? 'revoked' : 'active' }),
         ]}
         rowActions={[{ label: 'Revoke', variant: 'destructive', onClick: (apiKey) => void revokeKey(apiKey) }]}
-        bulkActions={[{ label: 'Revoke Selected', variant: 'destructive', onClick: (rows) => { if (window.confirm(`Revoke ${rows.length} selected API keys?`)) { void Promise.all(rows.map((k) => api.revokeApiKey(k.id))).then(() => refresh()); } } }]}
+        bulkActions={[{ label: 'Revoke Selected', variant: 'destructive', onClick: (rows) => { void Promise.all(rows.map((k) => api.revokeApiKey(k.id))).then(() => refresh()); } }]}
       />
       <CrudEntityDialog
         open={dialogOpen}

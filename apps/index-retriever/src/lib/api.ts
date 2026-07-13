@@ -108,6 +108,30 @@ export type IndexRetrieverApi = Readonly<{
     file: File;
     metadata?: JsonRecord;
   }) => Promise<unknown>;
+
+  // W28E-603 / W28E-1805B — Document-structure tools (generic /api/v1/tools/<tool> dispatch).
+  structureHealth: () => Promise<unknown>;
+  structureDocumentList: (params?: { profile?: string; collection?: string; status?: string; limit?: number; offset?: number }) => Promise<unknown>;
+  structureDocumentGet: (structureDocumentId: string, include?: string[]) => Promise<unknown>;
+  structureDocumentDelete: (structureDocumentId: string) => Promise<unknown>;
+  structureOutlineGet: (structureDocumentId: string) => Promise<unknown>;
+  structurePagesList: (structureDocumentId: string) => Promise<unknown>;
+  structureSectionsList: (structureDocumentId: string) => Promise<unknown>;
+  structureExtract: (payload: { profile: string; collection: string; text: string; provider?: string; source_uri?: string; source_filename?: string }) => Promise<unknown>;
+  structureLinkToVdbRecords: (payload: { structure_document_id: string; vdb_record_ids?: string[]; chunk_ids?: string[]; source_document_id?: string }) => Promise<unknown>;
+  structureCorpusList: (params?: { profile?: string; limit?: number; offset?: number }) => Promise<unknown>;
+  structureCorpusGet: (corpusId: string) => Promise<unknown>;
+  structureCorpusCreate: (payload: JsonRecord) => Promise<unknown>;
+  structureCorpusUpdate: (corpusId: string, updates: JsonRecord) => Promise<unknown>;
+  structureCorpusDelete: (corpusId: string) => Promise<unknown>;
+  structureCorpusAnalyse: (corpusId: string) => Promise<unknown>;
+  structureCorpusPatternsGet: (corpusId: string, patternType?: string) => Promise<unknown>;
+  structureTemplateList: (params?: { profile?: string; corpus_id?: string; limit?: number; offset?: number }) => Promise<unknown>;
+  structureTemplateGet: (templateId: string) => Promise<unknown>;
+  structureTemplateGenerate: (payload: { corpus_id: string; name?: string }) => Promise<unknown>;
+  structureTemplateExport: (templateId: string, format?: string) => Promise<unknown>;
+  structureTemplateMatch: (templateId: string, structureDocumentId: string) => Promise<unknown>;
+  structureTemplateDelete: (templateId: string) => Promise<unknown>;
 }>;
 
 export async function validateApiKey(baseUrl: string, apiKey: string): Promise<void> {
@@ -123,6 +147,21 @@ export async function validateApiKey(baseUrl: string, apiKey: string): Promise<v
   });
 
   await probe.get<unknown>(TOOL_BASE_PATH);
+}
+
+export async function getCurrentUserWithApiKey(baseUrl: string, apiKey: string): Promise<unknown> {
+  const key = apiKey.trim();
+  if (!key) {
+    throw new Error("API key is required.");
+  }
+
+  const probe = createApiClient({
+    baseUrl,
+    credentials: "include",
+    getAccessToken: () => key,
+  });
+
+  return probe.get<unknown>("/auth/me");
 }
 
 export function createIndexRetrieverApi(opts: {
@@ -289,5 +328,87 @@ export function createIndexRetrieverApi(opts: {
         }
         return body;
       }),
+
+    // W28E-603 / W28E-1805B — Document-structure tools dispatched via /api/v1/tools/<tool>.
+    structureHealth: () => safePost(`${TOOL_BASE_PATH}/structure_health`, {}),
+    structureDocumentList: (params) =>
+      safePost(`${TOOL_BASE_PATH}/structure_document_list`, {
+        ...(params?.profile ? { profile: params.profile } : {}),
+        ...(params?.collection ? { collection: params.collection } : {}),
+        ...(params?.status ? { status: params.status } : {}),
+        limit: params?.limit ?? 100,
+        offset: params?.offset ?? 0,
+      }),
+    structureDocumentGet: (structureDocumentId, include) =>
+      safePost(`${TOOL_BASE_PATH}/structure_document_get`, {
+        structure_document_id: structureDocumentId,
+        ...(include && include.length ? { include } : {}),
+      }),
+    structureDocumentDelete: (structureDocumentId) =>
+      safePost(`${TOOL_BASE_PATH}/structure_document_delete`, { structure_document_id: structureDocumentId }),
+    structureOutlineGet: (structureDocumentId) =>
+      safePost(`${TOOL_BASE_PATH}/structure_outline_get`, { structure_document_id: structureDocumentId }),
+    structurePagesList: (structureDocumentId) =>
+      safePost(`${TOOL_BASE_PATH}/structure_pages_list`, { structure_document_id: structureDocumentId }),
+    structureSectionsList: (structureDocumentId) =>
+      safePost(`${TOOL_BASE_PATH}/structure_sections_list`, { structure_document_id: structureDocumentId }),
+    structureExtract: (payload) =>
+      safePost(`${TOOL_BASE_PATH}/structure_extract`, {
+        profile: payload.profile,
+        collection: payload.collection,
+        text: payload.text,
+        provider: payload.provider ?? "internal",
+        ...(payload.source_uri ? { source_uri: payload.source_uri } : {}),
+        ...(payload.source_filename ? { source_filename: payload.source_filename } : {}),
+      }),
+    structureLinkToVdbRecords: (payload) =>
+      safePost(`${TOOL_BASE_PATH}/structure_link_to_vdb_records`, { ...payload }),
+    structureCorpusList: (params) =>
+      safePost(`${TOOL_BASE_PATH}/structure_corpus_list`, {
+        ...(params?.profile ? { profile: params.profile } : {}),
+        limit: params?.limit ?? 100,
+        offset: params?.offset ?? 0,
+      }),
+    structureCorpusGet: (corpusId) =>
+      safePost(`${TOOL_BASE_PATH}/structure_corpus_get`, { corpus_id: corpusId }),
+    structureCorpusCreate: (payload) =>
+      safePost(`${TOOL_BASE_PATH}/structure_corpus_create`, { ...payload }),
+    structureCorpusUpdate: (corpusId, updates) =>
+      safePost(`${TOOL_BASE_PATH}/structure_corpus_update`, { corpus_id: corpusId, updates }),
+    structureCorpusDelete: (corpusId) =>
+      safePost(`${TOOL_BASE_PATH}/structure_corpus_delete`, { corpus_id: corpusId }),
+    structureCorpusAnalyse: (corpusId) =>
+      safePost(`${TOOL_BASE_PATH}/structure_corpus_analyse`, { corpus_id: corpusId }),
+    structureCorpusPatternsGet: (corpusId, patternType) =>
+      safePost(`${TOOL_BASE_PATH}/structure_corpus_patterns_get`, {
+        corpus_id: corpusId,
+        ...(patternType ? { pattern_type: patternType } : {}),
+      }),
+    structureTemplateList: (params) =>
+      safePost(`${TOOL_BASE_PATH}/structure_template_list`, {
+        ...(params?.profile ? { profile: params.profile } : {}),
+        ...(params?.corpus_id ? { corpus_id: params.corpus_id } : {}),
+        limit: params?.limit ?? 100,
+        offset: params?.offset ?? 0,
+      }),
+    structureTemplateGet: (templateId) =>
+      safePost(`${TOOL_BASE_PATH}/structure_template_get`, { template_id: templateId }),
+    structureTemplateGenerate: (payload) =>
+      safePost(`${TOOL_BASE_PATH}/structure_template_generate`, {
+        corpus_id: payload.corpus_id,
+        ...(payload.name ? { name: payload.name } : {}),
+      }),
+    structureTemplateExport: (templateId, format) =>
+      safePost(`${TOOL_BASE_PATH}/structure_template_export`, {
+        template_id: templateId,
+        format: format ?? "markdown",
+      }),
+    structureTemplateMatch: (templateId, structureDocumentId) =>
+      safePost(`${TOOL_BASE_PATH}/structure_template_match`, {
+        template_id: templateId,
+        structure_document_id: structureDocumentId,
+      }),
+    structureTemplateDelete: (templateId) =>
+      safePost(`${TOOL_BASE_PATH}/structure_template_delete`, { template_id: templateId }),
   };
 }

@@ -14,9 +14,14 @@ type KnowledgeForm = {
   title: string;
   content: string;
   expert_id: string;
+  // EA-51: editable knowledge/index/ingest/lifecycle parameters (persisted to metadata).
+  backend: string;
+  collection: string;
+  embedding_model: string;
+  ttl: string;
 };
 
-const emptyForm: KnowledgeForm = { knowledge_type: 'user', knowledge_id: '', title: '', content: '', expert_id: '' };
+const emptyForm: KnowledgeForm = { knowledge_type: 'user', knowledge_id: '', title: '', content: '', expert_id: '', backend: '', collection: '', embedding_model: '', ttl: '' };
 
 function entryId(entry: KnowledgeRecord): string {
   return String(entry.entry_id ?? entry.id ?? '');
@@ -42,6 +47,9 @@ export function KnowledgePage() {
   const [loading, setLoading] = React.useState(true);
   const [saving, setSaving] = React.useState(false);
   const [status, setStatus] = React.useState<string | null>(null);
+  // EA-52: import / reuse an existing knowledge entry as the basis for a new one.
+  const [importOpen, setImportOpen] = React.useState(false);
+  const [importSourceId, setImportSourceId] = React.useState('');
 
   React.useEffect(() => {
     if (!form.knowledge_id && auth.user?.id) {
@@ -70,6 +78,11 @@ export function KnowledgePage() {
     { name: 'knowledge_id', label: 'Knowledge ID', type: 'text', required: true, readOnly: !authz.isAdmin },
     { name: 'title', label: 'Title', type: 'text', required: true },
     { name: 'expert_id', label: 'Linked expert', type: 'select', options: ['', ...experts.map((expert) => expert.name || `Expert ${expert.id}`)] },
+    // EA-51: knowledge / index / ingest / lifecycle parameters (persist to metadata).
+    { name: 'backend', label: 'Backend (vector store)', type: 'select', options: ['', 'chroma', 'qdrant', 'history-store'] },
+    { name: 'collection', label: 'Collection / index', type: 'text' },
+    { name: 'embedding_model', label: 'Embedding model', type: 'text' },
+    { name: 'ttl', label: 'Lifecycle TTL', type: 'text' },
   ], [authz.isAdmin, experts]);
 
   const openCreate = React.useCallback(() => {
@@ -88,9 +101,34 @@ export function KnowledgePage() {
       title: String(entry.title ?? metadata?.title ?? ''),
       content: entry.content ?? entry.description ?? '',
       expert_id: expertName,
+      backend: String(metadata?.backend ?? metadata?.vector_store_type ?? ''),
+      collection: String(metadata?.collection ?? ''),
+      embedding_model: String(metadata?.embedding_model ?? ''),
+      ttl: String(metadata?.ttl ?? ''),
     });
     setDialogOpen(true);
   }, [auth.user?.id, experts]);
+
+  const reuseExisting = React.useCallback(() => {
+    const source = entries.find((entry) => entryId(entry) === importSourceId);
+    if (!source) return;
+    const metadata = source.metadata as Record<string, unknown> | null | undefined;
+    const expertName = experts.find((expert) => String(expert.id) === String(metadata?.expert_id ?? ''))?.name ?? '';
+    setEditingEntryId(null);
+    setForm({
+      knowledge_type: (source.knowledge_type as KnowledgeForm['knowledge_type']) ?? 'user',
+      knowledge_id: String(auth.user?.id ?? source.knowledge_id ?? ''),
+      title: `${String(source.title ?? metadata?.title ?? entryTitle(source))} (imported)`,
+      content: source.content ?? source.description ?? '',
+      expert_id: expertName,
+      backend: String(metadata?.backend ?? metadata?.vector_store_type ?? ''),
+      collection: String(metadata?.collection ?? ''),
+      embedding_model: String(metadata?.embedding_model ?? ''),
+      ttl: String(metadata?.ttl ?? ''),
+    });
+    setImportOpen(false);
+    setDialogOpen(true);
+  }, [entries, experts, importSourceId, auth.user?.id]);
 
   const closeDialog = React.useCallback(() => {
     setDialogOpen(false);
@@ -108,6 +146,11 @@ export function KnowledgePage() {
         const selectedExpert = experts.find((e) => (e.name || `Expert ${e.id}`) === form.expert_id);
         if (selectedExpert) metadata.expert_id = Number(selectedExpert.id);
       }
+      // EA-51: persist editable knowledge/index/ingest/lifecycle params into metadata.
+      if (form.backend) metadata.backend = form.backend;
+      if (form.collection) metadata.collection = form.collection;
+      if (form.embedding_model) metadata.embedding_model = form.embedding_model;
+      if (form.ttl) metadata.ttl = form.ttl;
       if (editingEntryId === null) {
         await api.createKnowledge({ knowledge_type: form.knowledge_type, knowledge_id: Number(form.knowledge_id), content: form.content, metadata });
         setStatus('Knowledge entry created.');
@@ -125,7 +168,6 @@ export function KnowledgePage() {
   }, [api, captureFailure, clearFailure, closeDialog, editingEntryId, form, refresh]);
 
   const deleteEntry = React.useCallback(async (entry: KnowledgeRecord) => {
-    if (!window.confirm('Delete this knowledge entry?')) return;
     clearFailure();
     try {
       await api.deleteKnowledge({ knowledge_type: String(entry.knowledge_type ?? 'user'), knowledge_id: Number(entry.knowledge_id ?? auth.user?.id ?? 0), entry_id: entryId(entry) });
@@ -138,7 +180,6 @@ export function KnowledgePage() {
 
   const bulkDeleteEntries = React.useCallback(async (selected: KnowledgeRecord[]) => {
     if (!selected.length) return;
-    if (!window.confirm(`Delete ${selected.length} selected knowledge entries?`)) return;
     clearFailure();
     try {
       await Promise.all(selected.map(async (entry) => api.deleteKnowledge({
@@ -181,8 +222,30 @@ export function KnowledgePage() {
             <option value="session">Session</option>
           </Select>
         </label>
-        <Button type="button" onClick={openCreate}>Add Knowledge</Button>
+        <div className="flex items-center gap-2">
+          <Button type="button" variant="secondary" onClick={() => setImportOpen((v) => !v)}>Import / Reuse</Button>
+          <Button type="button" onClick={openCreate}>Add Knowledge</Button>
+        </div>
       </div>
+      {importOpen && (
+        <div className="rounded-lg border p-4 space-y-3" data-testid="knowledge-import-panel">
+          <h3 className="font-semibold text-sm">Import / reuse an existing knowledge entry</h3>
+          <p className="text-sm text-muted-foreground">Select an existing entry to import its content + parameters as the basis for a new entry.</p>
+          <div className="flex flex-wrap items-end gap-3">
+            <label className="space-y-2">
+              <span className="text-sm font-medium">Source entry</span>
+              <Select value={importSourceId} onChange={(event) => setImportSourceId(event.target.value)} aria-label="Import source entry">
+                <option value="">Select an entry…</option>
+                {entries.map((entry) => (
+                  <option key={entryId(entry)} value={entryId(entry)}>{entryTitle(entry)} (#{entryId(entry)})</option>
+                ))}
+              </Select>
+            </label>
+            <Button type="button" disabled={!importSourceId} onClick={reuseExisting}>Import selected</Button>
+            <Button type="button" variant="ghost" onClick={() => setImportOpen(false)}>Cancel</Button>
+          </div>
+        </div>
+      )}
       <AppDataTable
         title="Knowledge inventory"
         rows={visibleEntries}

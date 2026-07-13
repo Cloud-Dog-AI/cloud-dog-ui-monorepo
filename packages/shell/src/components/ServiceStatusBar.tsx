@@ -46,13 +46,14 @@ export function ServiceStatusBar(props: ServiceStatusBarProps) {
       aria-label="Service health"
     >
       {props.services.map((svc) => (
-        <Tooltip key={svc.name} content={`${svc.name} — ${svc.url}`}>
+        <Tooltip key={svc.name} content={`${svc.name} — ${svc.url || "Not configured"}`}>
           <span className="inline-flex items-center gap-1">
             <span
               className={cn("h-2 w-2 rounded-full shrink-0", dotColor[svc.status])}
               aria-hidden="true"
             />
             <span>{svc.name}</span>
+            {!svc.url ? <><span aria-hidden="true">—</span><span>Not configured</span></> : null}
           </span>
         </Tooltip>
       ))}

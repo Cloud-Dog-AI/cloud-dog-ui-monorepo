@@ -396,7 +396,7 @@ export function ChatPage() {
                 <div key={entry.id} data-testid={isUser ? 'chat-message-user' : 'chat-message-assistant'} className={`max-w-[82%] rounded-lg border p-3 space-y-2 ${isUser ? 'ml-auto bg-primary text-primary-foreground' : 'mr-auto bg-muted/30'}`}>
                   <div className="flex items-center justify-between gap-3">
                     <Badge variant={isUser ? 'secondary' : 'default'}>{label}</Badge>
-                    <span className={`text-xs ${isUser ? 'text-primary-foreground/80' : 'text-muted-foreground'}`}>{renderRelativeTime(entry.timestamp)}</span>
+                    <span className="text-xs">{renderRelativeTime(entry.timestamp, isUser ? 'text-xs text-primary-foreground' : 'text-xs text-muted-foreground')}</span>
                   </div>
                   <p className="whitespace-pre-wrap text-sm">{entry.content ?? ''}</p>
                   {!isUser && entry.id === latestAssistantId && toolCalls.length > 0 ? (

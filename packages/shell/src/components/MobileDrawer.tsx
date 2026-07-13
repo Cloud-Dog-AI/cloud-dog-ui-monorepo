@@ -20,13 +20,14 @@ import type { NavItem } from "../types/nav.js";
 import { useShell } from "../context/useShell.js";
 import { LeftNav } from "./LeftNav.js";
 
-export function MobileDrawer(props: { items: NavItem[] }) {
+export function MobileDrawer(props: { items: NavItem[]; testIdPrefix?: string }) {
   const shell = useShell();
+  const testIdPrefix = props.testIdPrefix ?? "cloud-dog-shell";
   return (
-    <div className="md:hidden">
+    <div className="md:hidden" data-testid={`${testIdPrefix}-mobile-drawer-host`}>
       <Sheet open={shell.mobileDrawerOpen} onOpenChange={(o) => shell.setMobileDrawerOpen(o)} side="left">
-        <div className="h-full">
-          <LeftNav items={props.items} mode="drawer" />
+        <div className="h-full" data-testid={`${testIdPrefix}-mobile-drawer`}>
+          <LeftNav items={props.items} mode="drawer" testIdPrefix={testIdPrefix} />
         </div>
       </Sheet>
     </div>

@@ -111,7 +111,7 @@ export const test = base.extend({
       globalWindow.__sqlAgentDownloadLog__ = existingLog;
 
       const originalClick = HTMLAnchorElement.prototype.click;
-      if (!(HTMLAnchorElement.prototype as HTMLAnchorElement['click'] & { __sqlAgentWrapped__?: boolean }).__sqlAgentWrapped__) {
+      if (!(HTMLAnchorElement.prototype.click as HTMLAnchorElement['click'] & { __sqlAgentWrapped__?: boolean }).__sqlAgentWrapped__) {
         const wrappedClick = function (this: HTMLAnchorElement) {
           if (this.download) {
             globalWindow.__sqlAgentDownloadLog__?.push({

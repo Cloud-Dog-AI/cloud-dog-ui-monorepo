@@ -444,9 +444,11 @@ export function DataList(props: {
 export function JsonBlock(props: { value: unknown; maxHeightClass?: string }) {
   return (
     <pre
+      aria-label="JSON content"
       className={`overflow-auto rounded-2xl bg-slate-950 p-4 text-xs leading-6 text-slate-100 ${
         props.maxHeightClass ?? 'max-h-96'
       }`}
+      tabIndex={0}
     >
       {JSON.stringify(props.value, null, 2)}
     </pre>

@@ -16,6 +16,7 @@
 // multi-select, bulk actions, and column picker.
 
 import * as React from "react";
+import { Eye, FileText, Pencil, Trash2 } from "lucide-react";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "./Table";
 import { Button } from "../button/Button";
 import { Checkbox } from "../input/Checkbox";
@@ -29,6 +30,18 @@ export type DataColumn<T> = Readonly<{
   cell: (row: T) => React.ReactNode;
   sortable?: boolean;
   sortValue?: (row: T) => string | number;
+}>;
+
+/** CX-102 row action descriptor. Consumers pass data; shared UI owns button styling. */
+export type DataTableAction<T> = Readonly<{
+  id: string;
+  label: string;
+  icon?: React.ReactNode;
+  onClick?: (row: T) => void;
+  href?: (row: T) => string;
+  destructive?: boolean;
+  disabled?: (row: T) => boolean;
+  title?: (row: T) => string;
 }>;
 
 /** Bulk action descriptor. */
@@ -49,6 +62,8 @@ export type DataTableProps<T> = Readonly<{
   getRowId?: (row: T) => string;
   /** Accessible label for each row (used as aria-label to control the row's accessible name). */
   getRowName?: (row: T) => string;
+  /** Stable test id for row-level conformance proof. */
+  getRowTestId?: (row: T) => string | undefined;
 
   // Pagination
   page?: number;
@@ -67,6 +82,9 @@ export type DataTableProps<T> = Readonly<{
   // Column picker
   columnPickerEnabled?: boolean;
   tableId?: string;
+
+  /** CX-160 polling stability: optionally merge polled rows by stable row id instead of replacing row objects wholesale. */
+  mergeStrategy?: "replace" | "byId" | ((previousRows: T[], nextRows: T[], getRowId: (row: T, index: number) => string) => T[]);
 
   className?: string;
 }>;
@@ -106,6 +124,78 @@ function _writeVisibleCols(tableId: string, ids: Set<string>): void {
   try {
     localStorage.setItem(`dt.cols.${tableId}`, JSON.stringify([...ids]));
   } catch { /* ignore */ }
+}
+
+function _mergeRowsById<T>(previousRows: T[], nextRows: T[], getRowId: (row: T, index: number) => string): T[] {
+  const previousById = new Map(previousRows.map((row, index) => [getRowId(row, index), row]));
+  return nextRows.map((row, index) => {
+    const id = getRowId(row, index);
+    const previous = previousById.get(id);
+    if (!previous || typeof previous !== "object" || typeof row !== "object") {
+      return row;
+    }
+    return { ...(previous as Record<string, unknown>), ...(row as Record<string, unknown>) } as T;
+  });
+}
+
+function defaultActionIcon(action: DataTableAction<unknown>): React.ReactNode {
+  const key = `${action.id} ${action.label}`.toLowerCase();
+  if (key.includes("delete") || key.includes("revoke") || key.includes("remove")) return <Trash2 className="h-4 w-4" />;
+  if (key.includes("audit") || key.includes("log")) return <FileText className="h-4 w-4" />;
+  if (key.includes("edit")) return <Pencil className="h-4 w-4" />;
+  return <Eye className="h-4 w-4" />;
+}
+
+export function DataTableActionCell<T>(props: Readonly<{ row: T; actions: readonly DataTableAction<T>[] }>) {
+  return (
+    <div className="flex flex-wrap items-center gap-1">
+      {props.actions.map((action) => {
+        const disabled = action.disabled?.(props.row) ?? false;
+        const icon = action.icon ?? defaultActionIcon(action as DataTableAction<unknown>);
+        const content = (
+          <>
+            <span aria-hidden="true" className="inline-flex h-4 w-4 items-center justify-center">{icon}</span>
+            {action.label}
+          </>
+        );
+        const commonClass = action.destructive ? "text-destructive hover:text-destructive" : "";
+        const title = action.title?.(props.row) ?? action.label;
+
+        if (action.href && !disabled) {
+          return (
+            <Button key={action.id} asChild variant="ghost" size="sm" className={commonClass} title={title}>
+              <a href={action.href(props.row)}>{content}</a>
+            </Button>
+          );
+        }
+
+        return (
+          <Button
+            key={action.id}
+            variant="ghost"
+            size="sm"
+            className={commonClass}
+            disabled={disabled}
+            title={title}
+            onClick={() => action.onClick?.(props.row)}
+          >
+            {content}
+          </Button>
+        );
+      })}
+    </div>
+  );
+}
+
+export function createDataTableActionColumn<T>(
+  actionsForRow: (row: T) => readonly DataTableAction<T>[],
+  header = "Actions",
+): DataColumn<T> {
+  return {
+    id: "__actions",
+    header,
+    cell: (row) => <DataTableActionCell row={row} actions={actionsForRow(row)} />,
+  };
 }
 
 /** PFW-2 Column picker with backdrop, outside-click, and Escape dismissal. */
@@ -156,6 +246,7 @@ function ColumnPicker<T>({
         onClick={() => onOpenChange(!open)}
         aria-expanded={open}
         aria-haspopup="true"
+        data-testid="CW-T3"
       >
         Columns
       </Button>
@@ -192,6 +283,7 @@ export function DataTable<T>(props: DataTableProps<T>) {
     totalRows,
     getRowId,
     getRowName,
+    getRowTestId,
     page: controlledPage,
     pageSize: controlledPageSize,
     onPageChange,
@@ -204,8 +296,27 @@ export function DataTable<T>(props: DataTableProps<T>) {
     selectionColumnPosition = "start",
     columnPickerEnabled = false,
     tableId = "default",
+    mergeStrategy = "replace",
     className,
   } = props;
+
+  const getId = React.useCallback((row: T, idx: number) => getRowId?.(row) ?? String(idx), [getRowId]);
+  const [stableRows, setStableRows] = React.useState(rows);
+
+  React.useEffect(() => {
+    if (mergeStrategy === "replace") {
+      setStableRows(rows);
+      return;
+    }
+    setStableRows((previousRows) => {
+      if (typeof mergeStrategy === "function") {
+        return mergeStrategy(previousRows, rows, getId);
+      }
+      return _mergeRowsById(previousRows, rows, getId);
+    });
+  }, [getId, mergeStrategy, rows]);
+
+  const rowsForRender = mergeStrategy === "replace" ? rows : stableRows;
 
   // --- Sort state ---
   const [sort, setSort] = React.useState<{ id: string; dir: "asc" | "desc" } | null>(null);
@@ -219,10 +330,10 @@ export function DataTable<T>(props: DataTableProps<T>) {
   };
 
   const sorted = React.useMemo(() => {
-    if (!sort) return rows;
+    if (!sort) return rowsForRender;
     const col = columns.find((c) => c.id === sort.id);
-    if (!col?.sortable) return rows;
-    const r = [...rows];
+    if (!col?.sortable) return rowsForRender;
+    const r = [...rowsForRender];
     r.sort((a, b) => {
       const av = col.sortValue ? col.sortValue(a) : _defaultSortValue(col, a);
       const bv = col.sortValue ? col.sortValue(b) : _defaultSortValue(col, b);
@@ -230,11 +341,11 @@ export function DataTable<T>(props: DataTableProps<T>) {
       return sort.dir === "asc" ? comparison : -comparison;
     });
     return r;
-  }, [rows, columns, sort]);
+  }, [rowsForRender, columns, sort]);
 
   // --- Pagination ---
-  const pageSize = controlledPageSize ?? (rows.length || 1);
-  const effectiveTotalRows = Math.max(totalRows ?? rows.length, rows.length);
+  const pageSize = controlledPageSize ?? (rowsForRender.length || 1);
+  const effectiveTotalRows = Math.max(totalRows ?? rowsForRender.length, rowsForRender.length);
   const totalPages = Math.max(1, Math.ceil(effectiveTotalRows / pageSize));
   const page = Math.min(Math.max(controlledPage ?? 1, 1), totalPages);
   const startIdx = (page - 1) * pageSize;
@@ -295,7 +406,6 @@ export function DataTable<T>(props: DataTableProps<T>) {
 
   // --- Multi-select ---
   const [selected, setSelected] = React.useState<Set<string>>(new Set());
-  const getId = (row: T, idx: number) => getRowId?.(row) ?? String(idx);
   const pageIds = paged.map((r, i) => getId(r, startIdx + i));
   const allSelected = pageIds.length > 0 && pageIds.every((id) => selected.has(id));
   const someSelected = selected.size > 0;
@@ -316,7 +426,7 @@ export function DataTable<T>(props: DataTableProps<T>) {
   };
 
   // --- Render ---
-  const isEmpty = !rows.length;
+  const isEmpty = !rowsForRender.length;
   const renderSelectionHeader = () => (
     <TableHead className="w-10">
       <Checkbox checked={allSelected} aria-label="Select all rows on current page"
@@ -331,11 +441,13 @@ export function DataTable<T>(props: DataTableProps<T>) {
   );
 
   return (
-    <div className={cn("space-y-2", className)}>
+    // PS-77 CW-T1 — DataTable root container.
+    <div className={cn("space-y-2", className)} data-testid="CW-T1">
       {/* Toolbar: bulk actions + column picker */}
       <div className="flex flex-wrap items-center gap-2">
         {selectable && someSelected && (
-          <div className="flex items-center gap-2 rounded-md border bg-muted/50 px-3 py-1 text-sm">
+          // PS-77 CW-T4 — bulk-action toolbar (appears on selection).
+          <div className="flex items-center gap-2 rounded-md border bg-muted/50 px-3 py-1 text-sm" data-testid="CW-T4">
             <span>{selected.size} selected</span>
             {bulkActions.map((ba) => (
               <Button key={ba.action} variant="secondary" size="sm"
@@ -345,7 +457,8 @@ export function DataTable<T>(props: DataTableProps<T>) {
             ))}
           </div>
         )}
-        <div className="ml-auto flex items-center gap-2">
+        {/* PS-77 CW-T10 — action-button area (top-right toolbar above the table). */}
+        <div className="ml-auto flex items-center gap-2" data-testid="CW-T10">
           {columnPickerEnabled && (
             <ColumnPicker
               open={pickerOpen}
@@ -360,13 +473,14 @@ export function DataTable<T>(props: DataTableProps<T>) {
 
       {/* Table */}
       <Table aria-label={ariaLabel}>
-        <TableHeader>
+        <TableHeader data-testid="datatable-header">
           <TableRow>
             {selectable && selectionColumnPosition === "start" ? renderSelectionHeader() : null}
             {visibleColumns.map((c) => (
               <TableHead key={c.id}>
                 {c.sortable ? (
-                  <button type="button" className="inline-flex items-center gap-1 text-sm font-medium hover:text-foreground"
+                  // PS-77 CW-T2 — sortable column header (with asc/desc indicator).
+                  <button type="button" data-testid="CW-T2" className="inline-flex items-center gap-1 text-sm font-medium hover:text-foreground"
                     onClick={() => toggleSort(c.id)}>
                     {c.header}
                     {sort?.id === c.id ? (
@@ -386,7 +500,8 @@ export function DataTable<T>(props: DataTableProps<T>) {
         <TableBody>
           {isEmpty && emptyMessage ? (
             <TableRow>
-              <TableCell colSpan={visibleColumns.length + (selectable ? 1 : 0)} className="text-center text-sm text-muted-foreground py-6">
+              {/* PS-77 CW-T6 — empty-state message (no rows). */}
+              <TableCell data-testid="CW-T6" colSpan={visibleColumns.length + (selectable ? 1 : 0)} className="text-center text-sm text-muted-foreground py-6">
                 {emptyMessage}
               </TableCell>
             </TableRow>
@@ -394,7 +509,14 @@ export function DataTable<T>(props: DataTableProps<T>) {
           {!isEmpty ? paged.map((row, idx) => {
             const id = getId(row, startIdx + idx);
             return (
-              <TableRow key={id} aria-label={getRowName ? getRowName(row) : undefined}>
+              <TableRow
+                key={id}
+                aria-label={getRowName ? getRowName(row) : undefined}
+                // PS-77 CW-T11 — data row (consumer-supplied test id preferred, CW-T11 as canonical fallback).
+                data-testid={getRowTestId?.(row) ?? "CW-T11"}
+                data-cw-testid="CW-T11"
+                data-row-id={id}
+              >
                 {selectable && selectionColumnPosition === "start" ? renderSelectionCell(row, id) : null}
                 {visibleColumns.map((c) => (
                   <TableCell key={c.id}>{c.cell(row)}</TableCell>
@@ -408,9 +530,10 @@ export function DataTable<T>(props: DataTableProps<T>) {
 
       {/* Pagination */}
       {onPageChange && (
-        <div className="flex flex-col gap-3 text-sm text-muted-foreground md:flex-row md:items-center md:justify-between">
+        // PS-77 CW-T5 — pagination control (prev/next, page jump, items-per-page, row count).
+        <div data-testid="CW-T5" className="flex flex-col gap-3 text-sm text-muted-foreground md:flex-row md:items-center md:justify-between">
           <span className="whitespace-nowrap">
-            Showing {displayStart}–{displayEnd} of {displayTotalRows}
+            Total Records: {displayTotalRows} • Page {page} of {totalPages}
           </span>
           <div className="ml-auto flex flex-nowrap items-center gap-3">
             {onPageSizeChange && (

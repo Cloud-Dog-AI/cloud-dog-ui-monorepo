@@ -92,6 +92,19 @@ export type ConfigSourcesResponse = Readonly<{
   counts: Record<string, unknown>;
 }>;
 
+export type SelectionOptionRow = Readonly<{ value: string; label: string; secondary?: string }>;
+
+export type WorkspaceRow = Readonly<{
+  workspace_id: string;
+  profile_id: string;
+  mode: string;
+  path: string;
+  last_used_at: string;
+  current_ref: string | null;
+  is_open: boolean;
+  owner: string | null;
+}>;
+
 export type GitMcpApi = Readonly<{
   probeApiKey: (apiKey: string) => Promise<void>;
   getHealth: () => Promise<HealthResponse>;
@@ -105,7 +118,15 @@ export type GitMcpApi = Readonly<{
   auditSettingsReveal: (apiKey: string) => Promise<void>;
   updateUiSettings: (apiKey: string, payload: Record<string, unknown>) => Promise<ToolCallOutcome>;
   listAuditEntries: (apiKey: string, logType?: string) => Promise<AuditLogItem[]>;
-  listServerLogs: (apiKey: string, logType?: string, limit?: number, contains?: string) => Promise<ServerLogRow[]>;
+  listServerLogs: (apiKey: string, logType?: string, limit?: number, contains?: string, filters?: Record<string, string>) => Promise<ServerLogRow[]>;
+  listWorkspaces: (apiKey: string, owner?: string, profileId?: string) => Promise<WorkspaceRow[]>;
+  createWorkspace: (apiKey: string, profileId: string, mode?: string) => Promise<ToolCallOutcome>;
+  listWorkspaceRefs: (apiKey: string, workspaceId: string, refType: string) => Promise<SelectionOptionRow[]>;
+  listWorkspacePaths: (apiKey: string, workspaceId: string, ref?: string, prefix?: string) => Promise<SelectionOptionRow[]>;
+  listWorkspaceAuthors: (apiKey: string, workspaceId: string) => Promise<SelectionOptionRow[]>;
+  listWorkspaceStashes: (apiKey: string, workspaceId: string) => Promise<SelectionOptionRow[]>;
+  listProfileBranches: (apiKey: string, profileId: string) => Promise<SelectionOptionRow[]>;
+  profileSyncStatus: (apiKey: string, profileId: string) => Promise<Record<string, unknown>>;
   getA2aHealth: () => Promise<HealthResponse>;
   listApiTools: (apiKey: string) => Promise<ApiToolDescriptor[]>;
   listMcpTools: (apiKey: string) => Promise<ApiToolDescriptor[]>;
@@ -380,19 +401,109 @@ export function createGitMcpApi(baseUrl: string, mcpBaseUrl: string, apiBasePath
     logType = "audit",
     limit = 200,
     contains = "",
+    filters: Record<string, string> = {},
   ): Promise<ServerLogRow[]> {
-    const query = new URLSearchParams({
-      log_type: logType.trim() || "audit",
-      limit: String(limit),
-    });
+    const source = logType.trim() || "audit";
+    const activeFilters = Object.entries(filters).filter(([, value]) => value && String(value).trim());
+    // W28J-1309: audit deep-links (correlation_id, workspace_id, ...) route to /audit which
+    // applies the W28J-1308 structured filters; other sources use /logs.
+    const useAudit = source === "audit" && activeFilters.length > 0;
+    const query = new URLSearchParams({ limit: String(limit) });
+    if (!useAudit) {
+      query.set("log_type", source);
+    }
     if (contains.trim()) {
       query.set("contains", contains.trim());
     }
-    const body = await apiClient.get<unknown>(`${apiPath("/logs")}?${query.toString()}`, {
+    for (const [key, value] of activeFilters) {
+      query.set(key, String(value).trim());
+    }
+    const endpoint = useAudit ? "/audit" : "/logs";
+    const body = await apiClient.get<unknown>(`${apiPath(endpoint)}?${query.toString()}`, {
       headers: { "x-api-key": apiKey },
     });
     const items = asRecord(asRecord(body).result).items;
     return Array.isArray(items) ? (items as ServerLogRow[]) : [];
+  }
+
+  async function listWorkspaces(apiKey: string, owner = "me", profileId = ""): Promise<WorkspaceRow[]> {
+    const query = new URLSearchParams();
+    if (owner.trim()) query.set("owner", owner.trim());
+    if (profileId.trim()) query.set("profile_id", profileId.trim());
+    const suffix = query.toString() ? `?${query.toString()}` : "";
+    const body = await apiClient.get<unknown>(`${apiPath("/workspaces")}${suffix}`, {
+      headers: { "x-api-key": apiKey },
+    });
+    const items = asRecord(asRecord(body).result).items;
+    return Array.isArray(items) ? (items as WorkspaceRow[]) : [];
+  }
+
+  async function createWorkspace(apiKey: string, profileId: string, mode = "persistent"): Promise<ToolCallOutcome> {
+    const fallback = defaultMeta(200);
+    try {
+      const body = await apiClient.post<unknown>(apiPath("/workspaces"), { profile_id: profileId, mode }, {
+        headers: { "x-api-key": apiKey },
+        requestId: fallback.requestId,
+        correlationId: fallback.correlationId,
+      });
+      return outcomeSuccess(body, fallback);
+    } catch (error) {
+      if (error instanceof ApiError) {
+        return outcomeError(error.message, {
+          requestId: error.options.requestId ?? fallback.requestId,
+          correlationId: error.options.correlationId ?? fallback.correlationId,
+          status: error.options.status,
+          machineCode: error.options.code ?? MACHINE_CODE_UNKNOWN,
+        }, error.options.details ?? {});
+      }
+      return outcomeError(error instanceof Error ? error.message : "Create workspace failed", fallback, {});
+    }
+  }
+
+  async function getEnumItems(apiKey: string, path: string): Promise<Record<string, unknown>[]> {
+    const body = await apiClient.get<unknown>(apiPath(path), { headers: { "x-api-key": apiKey } });
+    const items = asRecord(asRecord(body).result).items;
+    return Array.isArray(items) ? (items as Record<string, unknown>[]) : [];
+  }
+
+  async function listWorkspaceRefs(apiKey: string, workspaceId: string, refType: string): Promise<SelectionOptionRow[]> {
+    const items = await getEnumItems(apiKey, `/workspaces/${encodeURIComponent(workspaceId)}/refs?type=${encodeURIComponent(refType)}`);
+    return items.map((i) => ({
+      value: String(i.ref_id ?? i.ref_name ?? ""),
+      label: String(i.ref_name ?? i.ref_id ?? ""),
+      secondary: i.secondary ? String(i.secondary) : i.ref_type ? String(i.ref_type) : undefined,
+    }));
+  }
+
+  async function listWorkspacePaths(apiKey: string, workspaceId: string, ref = "", prefix = ""): Promise<SelectionOptionRow[]> {
+    const q = new URLSearchParams();
+    if (ref) q.set("ref", ref);
+    if (prefix) q.set("prefix", prefix);
+    const suffix = q.toString() ? `?${q.toString()}` : "";
+    const items = await getEnumItems(apiKey, `/workspaces/${encodeURIComponent(workspaceId)}/paths${suffix}`);
+    return items.map((i) => ({ value: String(i.path ?? ""), label: String(i.path ?? ""), secondary: i.kind ? String(i.kind) : undefined }));
+  }
+
+  async function listWorkspaceAuthors(apiKey: string, workspaceId: string): Promise<SelectionOptionRow[]> {
+    const items = await getEnumItems(apiKey, `/workspaces/${encodeURIComponent(workspaceId)}/authors`);
+    return items.map((i) => ({ value: String(i.author ?? ""), label: String(i.author ?? ""), secondary: i.email ? String(i.email) : undefined }));
+  }
+
+  async function listWorkspaceStashes(apiKey: string, workspaceId: string): Promise<SelectionOptionRow[]> {
+    const items = await getEnumItems(apiKey, `/workspaces/${encodeURIComponent(workspaceId)}/stashes`);
+    return items.map((i) => ({ value: String(i.stash_id ?? ""), label: String(i.stash_id ?? ""), secondary: i.message ? String(i.message) : undefined }));
+  }
+
+  async function listProfileBranches(apiKey: string, profileId: string): Promise<SelectionOptionRow[]> {
+    const items = await getEnumItems(apiKey, `/profiles/${encodeURIComponent(profileId)}/branches`);
+    return items.map((i) => ({ value: String(i.ref_name ?? ""), label: String(i.ref_name ?? ""), secondary: i.is_default ? "default" : undefined }));
+  }
+
+  async function profileSyncStatus(apiKey: string, profileId: string): Promise<Record<string, unknown>> {
+    const body = await apiClient.get<unknown>(apiPath(`/profiles/${encodeURIComponent(profileId)}/sync-status`), {
+      headers: { "x-api-key": apiKey },
+    });
+    return asRecord(asRecord(body).result);
   }
 
   async function getA2aHealth(): Promise<HealthResponse> {
@@ -527,6 +638,8 @@ export function createGitMcpApi(baseUrl: string, mcpBaseUrl: string, apiBasePath
         name,
         source: asString(repo.source),
         defaultBranch: asString(repo.default_branch, "main") || "main",
+        // GM-PR-02: credential mode is part of the profile's auth config.
+        credentialMode: asString(asRecord(profile.auth).credential_mode, "session") || "session",
       });
     }
     return profiles.sort((a, b) => a.name.localeCompare(b.name));
@@ -869,6 +982,14 @@ export function createGitMcpApi(baseUrl: string, mcpBaseUrl: string, apiBasePath
     updateUiSettings,
     listAuditEntries,
     listServerLogs,
+    listWorkspaces,
+    createWorkspace,
+    listWorkspaceRefs,
+    listWorkspacePaths,
+    listWorkspaceAuthors,
+    listWorkspaceStashes,
+    listProfileBranches,
+    profileSyncStatus,
     getA2aHealth,
     listApiTools,
     listMcpTools,

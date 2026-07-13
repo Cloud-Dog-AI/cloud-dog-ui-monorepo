@@ -21,7 +21,7 @@
 
 import * as React from 'react';
 import { useConfig } from '@cloud-dog/config';
-import { Button, Checkbox, CodeViewer, Label, Textarea } from '@cloud-dog/ui';
+import { Button, Checkbox, CodeViewer, SearchPanel, Textarea } from '@cloud-dog/ui';
 import { ServiceStatusBar, type ServiceStatus } from '@cloud-dog/shell';
 import {
   DataList,
@@ -254,8 +254,7 @@ export function QueryPage() {
     };
   }, [activeStatus, cfg.API_BASE_URL, currentJobId, resultPreview]);
 
-  async function submitQuery(event: React.FormEvent<HTMLFormElement>) {
-    event.preventDefault();
+  async function runQuery() {
     abortRef.current?.abort();
 
     const controller = new AbortController();
@@ -341,7 +340,7 @@ export function QueryPage() {
   return (
     <PageFrame
       eyebrow="FR-52 / FR-53 / FR-88 / FR-89"
-      title="New Query"
+      title="Search"
       description="Submit operational SQL-agent questions through the authenticated Web proxy, choose async or wait-for-completion execution, and download the completed result as JSON, ASCII table, or CSV."
       actions={
         <Button
@@ -370,58 +369,63 @@ export function QueryPage() {
       </div>
 
       <div className="grid gap-6 xl:grid-cols-[1.15fr_0.85fr]">
-        <PanelCard
-          id="panelQuery"
-          title="Query console"
-          subtitle="Async mode returns a job reference immediately. Wait-for-completion mode can run for up to 480 seconds through the web proxy."
-        >
-          <form className="space-y-4" onSubmit={submitQuery}>
-            <label className="block space-y-2">
-              <Label className="text-sm font-semibold text-slate-700" htmlFor="queryInput">Question</Label>
-              <Textarea
-                className="min-h-40"
-                id="queryInput"
-                name="question"
-                onChange={(event) => setQuestion(event.target.value)}
-                value={question}
-              />
-            </label>
-
-            <label className="flex items-center gap-3 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
+        <SearchPanel
+          title="Search"
+          description="Async mode returns a job reference immediately. Wait-for-completion mode can run for up to 480 seconds through the web proxy."
+          filters={[]}
+          query={question}
+          onQueryChange={setQuestion}
+          onSearch={() => void runQuery()}
+          onClear={() => {
+            setQuestion('');
+            setSubmitError(null);
+          }}
+          queryInputId="queryInput"
+          queryLabel="Question"
+          queryAriaLabel="Question"
+          searchButtonLabel={waitForCompletion ? 'Run synchronously' : 'Queue async job'}
+          searchButtonTestId="submitQueryBtn"
+          loading={submitting}
+          loadingLabel="Running query"
+          searchDisabled={submitting || !question.trim()}
+          error={submitError ? <ErrorState message={submitError} /> : null}
+          scopeControls={
+            <label className="flex items-center gap-3 rounded-md border bg-muted/40 px-4 py-3 text-sm text-muted-foreground">
               <Checkbox
                 checked={waitForCompletion}
                 onChange={(event) => setWaitForCompletion(event.target.checked)}
               />
               Wait for completion in this tab instead of returning a background job reference
             </label>
-
-            <div className="flex flex-wrap items-center gap-3">
+          }
+          headerActions={
+            submitting && waitForCompletion ? (
               <Button
-                disabled={submitting || !question.trim()}
-                id="submitQueryBtn"
-                loading={submitting}
-                type="submit"
+                id="cancelSyncQueryBtn"
+                onClick={cancelSyncQuery}
+                type="button"
+                variant="destructive"
               >
-                {waitForCompletion ? 'Run synchronously' : 'Queue async job'}
+                Cancel sync query
               </Button>
-              {submitting && waitForCompletion ? (
-                <Button
-                  id="cancelSyncQueryBtn"
-                  onClick={cancelSyncQuery}
-                  type="button"
-                  variant="destructive"
-                >
-                  Cancel sync query
-                </Button>
-              ) : null}
-              <span className="text-xs uppercase tracking-[0.18em] text-slate-500">
-                Route: {waitForCompletion ? '/api/v1/query-sync' : '/api/v1/query'}
-              </span>
-            </div>
-          </form>
-
-          {submitError ? <div className="mt-4"><ErrorState message={submitError} /></div> : null}
-        </PanelCard>
+            ) : null
+          }
+          queryControl={
+            <Textarea
+              className="min-h-40"
+              id="queryInput"
+              name="question"
+              onChange={(event) => setQuestion(event.target.value)}
+              onKeyDown={(event) => event.stopPropagation()}
+              value={question}
+            />
+          }
+          results={
+            <span className="text-xs uppercase tracking-[0.18em] text-muted-foreground">
+              Route: {waitForCompletion ? '/api/v1/query-sync' : '/api/v1/query'}
+            </span>
+          }
+        />
 
         <PanelCard title="Execution summary" subtitle="Live query status, job reference, and result exports.">
           {submitting ? (

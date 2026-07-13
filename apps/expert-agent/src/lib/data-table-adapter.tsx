@@ -2,6 +2,7 @@ import * as React from 'react';
 import {
   Button,
   Card, CardContent, CardHeader,
+  ConfirmDialog,
   DataTable,
   EntityDialog,
   FileBrowser, FileDropZone,
@@ -62,6 +63,28 @@ export function AppDataTable<T>(props: {
   const [page, setPage] = React.useState(1);
   const [pageSize, setPageSize] = React.useState(25);
   const [search, setSearch] = React.useState('');
+  const [pendingConfirm, setPendingConfirm] = React.useState<{
+    title: string;
+    description: string;
+    confirmLabel: string;
+    onConfirm: () => void | Promise<void>;
+  } | null>(null);
+
+  const runWithConfirm = React.useCallback((
+    action: { label: string; variant?: RowAction<T>['variant'] | BulkAction<T>['variant']; onClick: () => void | Promise<void> },
+    description: string,
+  ) => {
+    if (action.variant !== 'destructive') {
+      void action.onClick();
+      return;
+    }
+    setPendingConfirm({
+      title: action.label,
+      description,
+      confirmLabel: action.label,
+      onConfirm: action.onClick,
+    });
+  }, []);
 
   // Map AdoptionColumns to DataColumns, appending an actions column when needed.
   const columns: DataColumn<T>[] = React.useMemo(() => {
@@ -73,14 +96,26 @@ export function AppDataTable<T>(props: {
         cell: (row) => (
           <div className="flex flex-wrap gap-2">
             {props.rowActions!.map((a) => (
-              <Button key={a.label} type="button" size="sm" variant={a.variant ?? 'secondary'} className={a.variant === 'destructive' ? 'text-white' : ''} onClick={() => void a.onClick(row)}>{a.label}</Button>
+              <Button
+                key={a.label}
+                type="button"
+                size="sm"
+                variant={a.variant ?? 'secondary'}
+                className={a.variant === 'destructive' ? 'text-white' : ''}
+                onClick={() => runWithConfirm(
+                  { label: a.label, variant: a.variant, onClick: () => a.onClick(row) },
+                  `${a.label} ${props.itemLabel ?? props.title}?`,
+                )}
+              >
+                {a.label}
+              </Button>
             ))}
           </div>
         ),
       });
     }
     return base;
-  }, [props.columns, props.rowActions]);
+  }, [props.columns, props.itemLabel, props.rowActions, props.title, runWithConfirm]);
 
   const filteredRows = React.useMemo(() => {
     const query = search.trim().toLowerCase();
@@ -107,6 +142,7 @@ export function AppDataTable<T>(props: {
   );
 
   return (
+    <>
     <Card>
       <CardHeader>
         <div className="flex flex-wrap items-center justify-between gap-3">
@@ -153,13 +189,31 @@ export function AppDataTable<T>(props: {
             }
             const bulkActionIndex = Number(action.replace('bulk-', ''));
             if (Number.isNaN(bulkActionIndex)) return;
-            void props.bulkActions?.[bulkActionIndex]?.onClick(selectedRows);
+            const bulkAction = props.bulkActions?.[bulkActionIndex];
+            if (!bulkAction) return;
+            runWithConfirm(
+              { label: bulkAction.label, variant: bulkAction.variant, onClick: () => bulkAction.onClick(selectedRows) },
+              `${bulkAction.label} ${selectedRows.length} ${props.itemLabel ?? 'rows'}?`,
+            );
           }}
           columnPickerEnabled
           tableId={props.storageKey ?? `expert-agent:${props.title.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`}
         />
       </CardContent>
     </Card>
+    <ConfirmDialog
+      open={pendingConfirm !== null}
+      onOpenChange={(open) => { if (!open) setPendingConfirm(null); }}
+      title={pendingConfirm?.title ?? 'Confirm action'}
+      description={pendingConfirm?.description ?? 'Confirm this action.'}
+      confirmLabel={pendingConfirm?.confirmLabel ?? 'Confirm'}
+      onConfirm={() => {
+        const action = pendingConfirm?.onConfirm;
+        setPendingConfirm(null);
+        if (action) void action();
+      }}
+    />
+    </>
   );
 }
 

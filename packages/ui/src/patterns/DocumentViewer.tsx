@@ -119,7 +119,12 @@ export function DocumentViewer({
         </CardHeader>
       ) : null}
       <CardContent>
-        <div className="overflow-y-auto rounded border bg-muted/30 p-4" style={{ maxHeight }}>
+        <div
+          aria-label={title ? `${title} content` : "Document content"}
+          className="overflow-y-auto rounded border bg-muted/30 p-4"
+          style={{ maxHeight }}
+          tabIndex={0}
+        >
           {resolved === "json" ? (
             <JsonBlock title="" value={JSON.parse(content)} defaultCollapsed={defaultCollapsed} />
           ) : resolved === "markdown" ? (

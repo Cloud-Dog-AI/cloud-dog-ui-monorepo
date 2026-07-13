@@ -28,6 +28,7 @@ import {
   RelativeTime,
   SearchPanel,
   Textarea,
+  formatBytes,
   type BulkAction,
   type DataColumn,
   type SearchFilterDef,
@@ -165,6 +166,20 @@ export function SearchRetrievePage() {
           { label: "hybrid (cache+vector)", value: "hybrid" },
         ],
       },
+      {
+        // IMAP-368: configurable result limit (default 200).
+        name: "limit",
+        label: "Limit",
+        type: "select",
+        defaultValue: "200",
+        options: [
+          { label: "50", value: "50" },
+          { label: "100", value: "100" },
+          { label: "200 (default)", value: "200" },
+          { label: "500", value: "500" },
+          { label: "1000", value: "1000" },
+        ],
+      },
     ],
     [availableProfiles, availableFolders, profileId, folder],
   );
@@ -184,12 +199,15 @@ export function SearchRetrievePage() {
       setStatus("Searching...");
       setLoading(true);
 
+      // IMAP-368: respect operator-chosen limit (default 200).
+      const nextLimit = Number(String(filterValues.limit ?? "200")) || 200;
       const runSearch = async (requestedMode: string) =>
         api.callTool<{ messages?: unknown[] }>("mail_search", {
           profile_id: nextProfileId,
           mode: requestedMode,
           query: effectiveQuery,
           filters: { folder: nextFolder },
+          limit: nextLimit,
         });
 
       let effectiveMode = nextMode;
@@ -420,6 +438,55 @@ export function SearchRetrievePage() {
       },
       { id: "mailbox", header: "Mailbox", cell: (row) => row.mailbox || "N/A" },
       {
+        // IMAP-367: size from raw.
+        id: "size",
+        header: "Size",
+        cell: (row) => {
+          const sz = (row.raw as Record<string, unknown>)?.size_bytes ?? (row.raw as Record<string, unknown>)?.size;
+          return typeof sz === "number" ? <span className="font-mono text-xs">{formatBytes(sz)}</span> : <span className="text-xs text-muted-foreground">—</span>;
+        },
+        sortable: true,
+        sortValue: (row) => Number((row.raw as Record<string, unknown>)?.size_bytes ?? 0),
+      },
+      {
+        // IMAP-367: MIME type indicator.
+        id: "contentType",
+        header: "Type",
+        cell: (row) => {
+          const ct = String((row.raw as Record<string, unknown>)?.content_type ?? "");
+          if (!ct) return <span className="text-xs text-muted-foreground">—</span>;
+          // Compact: text/plain → "text", multipart/mixed → "multipart", text/html → "html"
+          const compact = ct.includes("html") ? "html" : ct.includes("multipart") ? "multipart" : ct.split("/")[0];
+          return <span className="font-mono text-xs">{compact}</span>;
+        },
+      },
+      {
+        // IMAP-367: attachment indicator.
+        id: "attachments",
+        header: "📎",
+        cell: (row) => {
+          const n = Array.isArray((row.raw as Record<string, unknown>)?.attachments)
+            ? ((row.raw as Record<string, unknown>).attachments as unknown[]).length
+            : Number((row.raw as Record<string, unknown>)?.attachment_count ?? 0);
+          return n > 0 ? <span className="text-xs">📎 {n}</span> : <span className="text-xs text-muted-foreground">—</span>;
+        },
+        sortable: true,
+        sortValue: (row) => {
+          const att = (row.raw as Record<string, unknown>)?.attachments;
+          return Array.isArray(att) ? att.length : Number((row.raw as Record<string, unknown>)?.attachment_count ?? 0);
+        },
+      },
+      {
+        // IMAP-362: live/cached indicator from row.raw.mode_used or per-row cached flag.
+        id: "source",
+        header: "Source",
+        cell: (row) => {
+          const raw = row.raw as Record<string, unknown>;
+          const cached = raw.cached === true || raw.source === "cache";
+          return <span className={`text-xs ${cached ? "text-muted-foreground" : "text-emerald-700"}`}>{cached ? "cached" : "live"}</span>;
+        },
+      },
+      {
         id: "relevance",
         header: "Relevance",
         cell: (row) => String(row.relevance),
@@ -590,10 +657,14 @@ export function SearchRetrievePage() {
 
   return (
     <div className="space-y-6">
-      <header>
-        <h1 className="text-2xl font-semibold">Mailbox — Search & Retrieve</h1>
+      <header className="space-y-1">
+        {/* IMAP-360 / IMAP-361: rename to Search and Retrieve. */}
+        <h1 className="text-2xl font-semibold">Search and Retrieve</h1>
         <p className="text-sm text-muted-foreground">
-          Targeted retrieval flow: pick a channel + folder + mode, run a query, then open individual messages and download attachments. (For workspace-style bulk operations across channels see <code>/mailbox-workspace</code>.)
+          Targeted retrieval: pick a channel, folder, and mode, then query.
+          <strong> Mode:</strong> <code>imap</code> = live IMAP fetch (slow, authoritative);
+          <code> cache</code> = local search-ledger (instant, may be stale).
+          <strong> Query syntax:</strong> RFC 3501 (e.g. <code>TEXT ukraine SINCE 25-May-2026</code>, <code>FROM "alice@example.com"</code>, <code>ALL</code>).
         </p>
       </header>
 
@@ -626,6 +697,17 @@ export function SearchRetrievePage() {
               getRowId={(row) => row.partId}
               emptyMessage="No attachments on this message."
               tableId="imap-message-dialog-attachments"
+              columnPickerEnabled
+              selectable
+              bulkActions={attachmentBulkActions}
+              onBulkAction={(action, ids) => {
+                if (action === "export") {
+                  downloadJson(
+                    "imap-message-attachments.json",
+                    attachments.filter((row) => ids.includes(row.partId)).map((row) => row.raw),
+                  );
+                }
+              }}
             />
 
             {extractedMarkdown ? (

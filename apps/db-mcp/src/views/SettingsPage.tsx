@@ -23,8 +23,20 @@
 // guessed in the browser).
 
 import * as React from "react";
-import { Badge, Button, Card, CardContent, CardHeader, Input, JsonExplorer } from "@cloud-dog/ui";
-import type { JsonExplorerSourceMap } from "@cloud-dog/ui";
+import {
+  Badge,
+  Button,
+  Card,
+  CardContent,
+  CardHeader,
+  SettingsPanel,
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableRow,
+} from "@cloud-dog/ui";
+import type { JsonExplorerSourceMap, SettingsPanelServerTab } from "@cloud-dog/ui";
 import { useDbMcpState } from "../state/AppState";
 import type { ConfigSourceMeta } from "../lib/api";
 
@@ -87,6 +99,21 @@ function listSecretPaths(sources: JsonExplorerSourceMap): string[] {
     .map(([path]) => path);
 }
 
+function KeyValueTable(props: Readonly<{ rows: Array<Readonly<{ label: string; value: string }>>; testId: string }>) {
+  return (
+    <Table className="w-full text-sm" data-testid={props.testId} aria-label="Settings details">
+      <TableBody>
+        {props.rows.map((row) => (
+          <TableRow key={row.label} className="border-b last:border-0">
+            <TableHead className="w-48 px-3 py-2 text-left font-medium text-muted-foreground">{row.label}</TableHead>
+            <TableCell className="px-3 py-2 font-mono text-foreground">{row.value}</TableCell>
+          </TableRow>
+        ))}
+      </TableBody>
+    </Table>
+  );
+}
+
 export function SettingsPage() {
   const { api, apiBaseUrl, appVersion } = useDbMcpState();
   const [config, setConfig] = React.useState<Record<string, unknown>>({});
@@ -119,9 +146,19 @@ export function SettingsPage() {
       .catch(() => setIsAdmin(false));
   }, [api]);
 
-  const tabData = React.useMemo(() => filterByServer(config, activeTab), [config, activeTab]);
   const totalKeys = typeof counts.total === "number" ? (counts.total as number) : Object.keys(sources).length;
   const secretCount = typeof counts.secret === "number" ? (counts.secret as number) : listSecretPaths(sources).length;
+  const serverTabs = React.useMemo<SettingsPanelServerTab[]>(
+    () =>
+      SERVER_TABS.map((server) => ({
+        id: server.id,
+        label: server.label,
+        data: filterByServer(config, server.id),
+        sources,
+        description: "Effective configuration",
+      })),
+    [config, sources],
+  );
 
   const onRevealConfirm = async () => {
     setConfirmReveal(false);
@@ -168,127 +205,78 @@ export function SettingsPage() {
 
   return (
     <div className="space-y-6" data-testid="settings-page">
-      <header className="space-y-2">
-        <div className="flex items-center gap-3">
-          <h1 className="text-2xl font-semibold">Settings</h1>
-          <Badge variant="default">connected</Badge>
-        </div>
-        <p className="text-sm text-muted-foreground">
-          db-mcp-server <span className="font-mono">{appVersion}</span> · effective configuration across all servers ·{" "}
-          <span data-testid="settings-key-count">{totalKeys}</span> keys · {secretCount} secrets · source-attributed
-          (PS-73 v2). API base: <span className="font-mono">{apiBaseUrl}</span>
-        </p>
-      </header>
+      <SettingsPanel
+        title="Settings"
+        serviceName="db-mcp-server"
+        version={appVersion}
+        description={`Effective configuration across all servers. API base: ${apiBaseUrl}`}
+        statusItems={[
+          { label: "connected", variant: "default" },
+          { label: "keys", value: totalKeys, testId: "settings-key-count" },
+          { label: "secrets", value: secretCount },
+        ]}
+        serverTabs={serverTabs}
+        activeServerId={activeTab}
+        onActiveServerChange={(serverId) => setActiveTab(serverId as ServerTab)}
+        searchTerm={search}
+        onSearchTermChange={setSearch}
+        revealedSecrets={revealed}
+        maxDepth={20}
+        alignValues="right"
+        error={error}
+        canRevealSecrets={isAdmin}
+        secretsRevealed={revealed.size > 0}
+        onRevealSecrets={revealed.size > 0 ? onHide : () => setConfirmReveal(true)}
+        revealSecretsLabel="Reveal secrets"
+        hideSecretsLabel="Hide secrets"
+        canExport={isAdmin}
+        onExport={onExport}
+        confirmRevealOpen={confirmReveal}
+        onConfirmReveal={() => void onRevealConfirm()}
+        onCancelReveal={() => setConfirmReveal(false)}
+        actions={<Button data-testid="settings-save-header" onClick={() => { void runHealth(); setStatus("Settings refreshed."); }}>Save</Button>}
+        footer={status ? <p role="status" className="text-sm text-foreground/80">{status}</p> : null}
+      >
 
-      {error ? <p role="alert" className="text-sm text-destructive">{error}</p> : null}
-      {status ? <p role="status" className="text-sm text-foreground/80">{status}</p> : null}
-
-      {/* PS-73 v2 SW11 — page-level search across keys AND values, all server tabs. */}
-      <div className="flex flex-col gap-3 lg:flex-row lg:items-center">
-        <Input
-          data-testid="settings-search"
-          value={search}
-          onChange={(event) => setSearch(event.target.value)}
-          placeholder="Search settings — keys and values, across all servers"
-          aria-label="Search settings"
-          className="flex-1"
-        />
-        <div className="flex flex-wrap gap-2">
-          {isAdmin ? (
-            revealed.size > 0 ? (
-              <Button data-testid="settings-hide-secrets" variant="secondary" onClick={onHide}>
-                Hide secrets
-              </Button>
-            ) : (
-              <Button data-testid="settings-reveal-secrets" variant="secondary" onClick={() => setConfirmReveal(true)}>
-                Reveal secrets (admin)
-              </Button>
-            )
-          ) : null}
-          {isAdmin ? (
-            <Button data-testid="settings-export" onClick={onExport}>
-              Download effective config
-            </Button>
-          ) : null}
-        </div>
-      </div>
-
-      {confirmReveal ? (
-        <Card data-testid="settings-reveal-confirm">
-          <CardContent className="flex flex-col gap-2 py-4">
-            <p className="text-sm">
-              Revealing secret values is an admin action and is audit-logged (PS-40). Revealed values are ephemeral.
-              Confirm?
-            </p>
-            <div className="flex gap-2">
-              <Button data-testid="settings-reveal-confirm-yes" variant="destructive" onClick={() => void onRevealConfirm()}>
-                Confirm reveal
-              </Button>
-              <Button variant="secondary" onClick={() => setConfirmReveal(false)}>
-                Cancel
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
-      ) : null}
-
-      {/* PS-73 v2 SW9 — per-server segmentation tabs. */}
-      <div className="flex flex-wrap gap-2 border-b" role="tablist" aria-label="Settings server tabs">
-        {SERVER_TABS.map((tab) => (
-          <button
-            key={tab.id}
-            type="button"
-            role="tab"
-            aria-selected={activeTab === tab.id}
-            data-testid={`settings-server-tab-${tab.id}`}
-            onClick={() => setActiveTab(tab.id)}
-            className={
-              "rounded-t-md px-4 py-2 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-ring " +
-              (activeTab === tab.id
-                ? "border-b-2 border-primary text-foreground"
-                : "text-muted-foreground hover:text-foreground")
-            }
-          >
-            {tab.label}
-          </button>
-        ))}
-      </div>
-
-      {/* PS-73 v2 SW1/SW10 — PS-81 JsonExplorer is the primary config widget. */}
-      <Card>
+      {/* XC-009 Card 2: Build metadata. */}
+      <Card data-testid="settings-card-build">
         <CardHeader>
-          <h2 className="text-lg font-semibold">
-            Configuration — {SERVER_TABS.find((t) => t.id === activeTab)?.label}
-          </h2>
+          <h2 className="text-lg font-semibold">Build metadata</h2>
+          <p className="text-sm text-muted-foreground">Service identity and deployed version.</p>
         </CardHeader>
         <CardContent>
-          <JsonExplorer
-            title="Effective configuration"
-            data={tabData}
-            sources={sources}
-            searchTerm={search}
-            revealedSecrets={revealed}
-            hideInternalSearch
-            defaultExpanded={false}
-            maxDepth={20}
+          <KeyValueTable
+            testId="settings-build-table"
+            rows={[
+              { label: "service", value: "db-mcp-server-web" },
+              { label: "version", value: appVersion },
+              { label: "api_version", value: "v1" },
+            ]}
           />
         </CardContent>
       </Card>
 
-      {/* PS-73 v2 SW2.7 — Health. */}
-      <Card>
+      {/* XC-009 Card 3: Diagnostics. */}
+      <Card data-testid="settings-card-diagnostics">
         <CardHeader>
           <div className="flex items-center gap-2">
-            <h2 className="text-lg font-semibold">Health</h2>
+            <h2 className="text-lg font-semibold">Diagnostics</h2>
             <Badge variant={healthOk ? "default" : "destructive"}>
               {healthOk === null ? "unknown" : healthOk ? "ok" : "error"}
             </Badge>
           </div>
+          <p className="text-sm text-muted-foreground">Health snapshot of the deployed service.</p>
         </CardHeader>
-        <CardContent>
+        <CardContent className="space-y-3">
           <Button onClick={() => void runHealth()}>Run ping</Button>
+          <KeyValueTable
+            testId="settings-health-table"
+            rows={[{ label: "status", value: healthOk === null ? "loading" : healthOk ? "ok" : "error" }]}
+          />
         </CardContent>
       </Card>
+
+      </SettingsPanel>
     </div>
   );
 }

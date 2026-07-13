@@ -22,6 +22,7 @@
 // skills come from `/.well-known/agent.json`.
 
 import * as React from 'react';
+import { useAuth } from '@cloud-dog/auth';
 import { useConfig } from '@cloud-dog/config';
 import {
   ApiDocsPanel,
@@ -54,14 +55,20 @@ type AgentCardResponse = {
 
 export function DocsPage() {
   const cfg = useConfig<AppRuntimeConfig>();
+  const auth = useAuth();
   const [tools, setTools] = React.useState<McpToolDoc[]>([]);
   const [skills, setSkills] = React.useState<A2aSkillDoc[]>([]);
 
   // 25-04: switch to the same `tools/list` JSON-RPC the McpPage uses, so
   // the registered-tools count is the same on both pages (>0 in preprod).
   React.useEffect(() => {
+    if (auth.isLoading || !auth.isAuthenticated) {
+      setTools([]);
+      return;
+    }
     let cancelled = false;
-    void requestJson<ToolsListResponse>(cfg.API_BASE_URL, '/mcp', {
+    const mcpBase = cfg.MCP_BASE_URL ?? `${cfg.API_BASE_URL}/api/mcp/messages`;
+    void requestJson<ToolsListResponse>(mcpBase, '', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ jsonrpc: '2.0', id: 46302, method: 'tools/list', params: {} }),
@@ -81,7 +88,7 @@ export function DocsPage() {
         if (!cancelled) setTools([]);
       });
     return () => { cancelled = true; };
-  }, [cfg.API_BASE_URL]);
+  }, [auth.isAuthenticated, auth.isLoading, cfg.API_BASE_URL, cfg.MCP_BASE_URL]);
 
   // 25-06: pull agent card; surface name + description + skills list with schema.
   React.useEffect(() => {
@@ -122,8 +129,8 @@ export function DocsPage() {
         a2aSkills={skills}
         links={[
           { label: 'OpenAPI JSON', href: `${cfg.API_BASE_URL}/openapi.json` },
-          { label: 'MCP Console', href: '/console/mcp' },
-          { label: 'A2A Console', href: '/console/a2a' },
+          { label: 'MCP Console', href: '/developer/mcp-console' },
+          { label: 'A2A Console', href: '/developer/a2a-console' },
         ]}
       />
     </PageFrame>

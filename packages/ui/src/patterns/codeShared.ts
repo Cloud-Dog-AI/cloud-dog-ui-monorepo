@@ -161,13 +161,27 @@ function defineTheme(monaco: MonacoApi, tokenTheme: TokenTheme) {
   monaco.editor.defineTheme(themeName, {
     base: tokenTheme === "dark" ? "vs-dark" : "vs",
     inherit: true,
-    rules: [
-      { token: "comment", foreground: "6B7280", fontStyle: "italic" },
-      { token: "keyword", foreground: "2563EB" },
-      { token: "number", foreground: "0F766E" },
-      { token: "string", foreground: "16A34A" },
-      { token: "delimiter.bracket", foreground: tokenTheme === "dark" ? "E5E7EB" : "111827" },
-    ],
+    // Syntax token colours are theme-aware so they meet WCAG 2.1 AA contrast
+    // (>=4.5:1 for normal text) against the editor background in BOTH themes.
+    // Light-theme tokens are darkened (the prior shared green #16A34A scored only
+    // 3.29:1 on the white editor background — axe color-contrast failure on the
+    // Templates/Examples code preview); dark-theme tokens keep their lighter hues.
+    rules:
+      tokenTheme === "dark"
+        ? [
+            { token: "comment", foreground: "9CA3AF", fontStyle: "italic" },
+            { token: "keyword", foreground: "60A5FA" },
+            { token: "number", foreground: "5EEAD4" },
+            { token: "string", foreground: "4ADE80" },
+            { token: "delimiter.bracket", foreground: "E5E7EB" },
+          ]
+        : [
+            { token: "comment", foreground: "4B5563", fontStyle: "italic" },
+            { token: "keyword", foreground: "1D4ED8" },
+            { token: "number", foreground: "0F766E" },
+            { token: "string", foreground: "166534" },
+            { token: "delimiter.bracket", foreground: "111827" },
+          ],
     colors: {
       "editor.background": tokenToMonacoColor(colors.background),
       "editor.foreground": tokenToMonacoColor(colors.foreground),

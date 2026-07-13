@@ -21,18 +21,18 @@ import {
   Card,
   CardContent,
   CardHeader,
-  CodeEditor,
   DataTable,
   EntityDialog,
   EntityForm,
   JsonExplorer,
+  MetadataEditor,
   RelativeTime,
   RelatedItemsPanel,
-  Textarea,
   type DataColumn,
   type EntityFieldDef,
   type EntityFormMode,
 } from "@cloud-dog/ui";
+import { COLLECTION_METADATA_SCHEMA } from "../data/metadataSchema";
 import { useIndexRetrieverState } from "../state/AppState";
 import type { CollectionRecord, JsonRecord, SourceConfigRecord } from "../lib/types";
 
@@ -534,26 +534,18 @@ export function CollectionCrudPage() {
                 <h3 className="text-base font-semibold">Collection metadata JSON</h3>
               </CardHeader>
               <CardContent className="space-y-3">
-                {dialogMode === "view" ? (
-                  <CodeEditor
-                    value={draft.metadata_json}
-                    language="json"
-                    ariaLabel="Metadata JSON"
-                    readOnly
-                    height={220}
-                  />
-                ) : (
-                  <Textarea
-                    id="ef-metadata_json"
-                    name="metadata_json"
-                    aria-label="Metadata JSON"
-                    rows={10}
-                    value={draft.metadata_json}
-                    onChange={(event) =>
-                      setDraft((current) => ({ ...current, metadata_json: event.target.value }) as CollectionDraft)
-                    }
-                  />
-                )}
+                {/* W28E-1878 CC-18: schema-aware metadata editor (shared @cloud-dog/ui
+                    primitive) bound to the collection indexing-override standard. */}
+                <MetadataEditor
+                  value={draft.metadata_json}
+                  schema={COLLECTION_METADATA_SCHEMA}
+                  readOnly={dialogMode === "view"}
+                  ariaLabel="Metadata JSON"
+                  idPrefix="ef"
+                  onChange={(_next, json) =>
+                    setDraft((current) => ({ ...current, metadata_json: json }) as CollectionDraft)
+                  }
+                />
                 {errors.metadata_json ? <p className="text-sm text-destructive">{errors.metadata_json}</p> : null}
                 <JsonExplorer
                   title="profile backend summary"

@@ -20,7 +20,9 @@ import {
   Card,
   CardContent,
   CardHeader,
+  ConfirmDialog,
   DataTable,
+  FileBrowser,
   FileDropZone,
   JsonExplorer,
   Label,
@@ -28,6 +30,8 @@ import {
   Select,
   Textarea,
   type DataColumn,
+  type FileItem,
+  type FolderNode,
 } from "@cloud-dog/ui";
 import { useIndexRetrieverState } from "../state/AppState";
 import type { JsonRecord, StoredFileRecord } from "../lib/types";
@@ -108,6 +112,7 @@ export function IngestSearchPage() {
   const app = useIndexRetrieverState();
   const { api, sourceConfig } = app;
   const canIngest = app.roles.some((role) => ["writer", "maintainer", "admin"].includes(role));
+  const canManageFiles = app.roles.some((role) => ["maintainer", "admin"].includes(role));
 
   const [text, setText] = React.useState("");
   const [query, setQuery] = React.useState("");
@@ -118,6 +123,7 @@ export function IngestSearchPage() {
   const [queuedFiles, setQueuedFiles] = React.useState<File[]>([]);
   const [storedFiles, setStoredFiles] = React.useState<StoredFileRecord[]>([]);
   const [storedFileResult, setStoredFileResult] = React.useState<unknown>(null);
+  const [deleteFileTarget, setDeleteFileTarget] = React.useState<StoredFileRecord | null>(null);
   const [status, setStatus] = React.useState("");
   const [error, setError] = React.useState<string | null>(null);
   const [searchLoading, setSearchLoading] = React.useState(false);
@@ -330,6 +336,26 @@ export function IngestSearchPage() {
     }
   };
 
+  const storedFilePath = React.useCallback((row: StoredFileRecord) => `/stored-files/${row.file_id}/${row.filename}`, []);
+  const storedFileByPath = React.useMemo(() => new Map(storedFiles.map((row) => [storedFilePath(row), row])), [storedFilePath, storedFiles]);
+  const storedFileBrowserFiles = React.useMemo<FileItem[]>(
+    () => storedFiles.map((row) => ({
+      name: row.filename,
+      path: storedFilePath(row),
+      size: `${row.size_bytes} B`,
+      contentType: row.profile,
+      status: row.content_hash ? "hashed" : "stored",
+      modified: row.created_at,
+      kind: "file",
+      testId: `index-retriever-stored-file-${row.file_id}`,
+    })),
+    [storedFilePath, storedFiles]
+  );
+  const storedFileBrowserFolders = React.useMemo<FolderNode[]>(
+    () => [{ name: "Stored files", path: "/stored-files", children: [] }],
+    []
+  );
+
   const runSearch = async (nextQuery = query, nextTopK = topK) => {
     setError(null);
     setStatus("");
@@ -480,7 +506,7 @@ export function IngestSearchPage() {
           <Button size="sm" variant="secondary" onClick={() => void downloadStoredFile(row.file_id)}>
             Download
           </Button>
-          <Button size="sm" variant="destructive" onClick={() => void deleteStoredFile(row.file_id)} disabled={!app.roles.some((role) => ["maintainer", "admin"].includes(role))}>
+          <Button size="sm" variant="destructive" onClick={() => setDeleteFileTarget(row)} disabled={!canManageFiles}>
             Delete
           </Button>
         </div>
@@ -579,7 +605,15 @@ export function IngestSearchPage() {
           <h2 className="text-lg font-semibold">Browser file upload</h2>
         </CardHeader>
         <CardContent className="space-y-3">
-          <FileDropZone accept=".txt,.pdf,.md,.json,.csv,.html" onDrop={(files) => setQueuedFiles(files)} />
+          <FileDropZone
+            accept=".txt,.pdf,.md,.json,.csv,.html"
+            disabled={!canIngest}
+            label="Upload browser file"
+            description="Queued files can be uploaded for indexing or stored-file lifecycle tests."
+            disabledDescription="Your current role cannot upload files."
+            onDrop={(files) => setQueuedFiles(files)}
+            testId="index-retriever-upload-file-drop-zone"
+          />
           <div className="text-sm text-muted-foreground">
             {queuedFiles.length > 0 ? `Selected: ${queuedFiles.map((file) => file.name).join(", ")}` : "No files selected."}
           </div>
@@ -602,6 +636,37 @@ export function IngestSearchPage() {
               Refresh Files
             </Button>
           </div>
+          <FileBrowser
+            folders={storedFileBrowserFolders}
+            files={storedFileBrowserFiles}
+            currentPath="/stored-files"
+            rootLabel="stored"
+            filesLabel="Stored files"
+            emptyMessage="No stored files."
+            readOnly={!canManageFiles}
+            statusMessage={`${storedFiles.length} stored files`}
+            onNavigate={() => undefined}
+            onRefresh={refreshStoredFiles}
+            onOpen={(path) => {
+              const row = storedFileByPath.get(path);
+              if (row) void viewStoredFile(row.file_id);
+            }}
+            onDownload={(path) => {
+              const row = storedFileByPath.get(path);
+              if (row) void downloadStoredFile(row.file_id);
+            }}
+            onDelete={canManageFiles ? (path) => {
+              const row = storedFileByPath.get(path);
+              if (row) void deleteStoredFile(row.file_id);
+            } : undefined}
+            deleteConfirmation={{
+              enabled: true,
+              title: "Delete stored file",
+              description: "Permanently delete this stored file from Index Retriever storage.",
+              confirmLabel: "Delete file",
+            }}
+            testId="index-retriever-stored-file-browser"
+          />
           <DataTable
             tableId="stored-file-lifecycle-table"
             ariaLabel="stored file lifecycle"
@@ -615,6 +680,23 @@ export function IngestSearchPage() {
           <JsonExplorer title="file result" data={storedFileResult ?? {}} defaultExpanded />
         </CardContent>
       </Card>
+
+      <ConfirmDialog
+        open={Boolean(deleteFileTarget)}
+        onOpenChange={(open) => {
+          if (!open) setDeleteFileTarget(null);
+        }}
+        title="Delete stored file"
+        description="Permanently delete this stored file from Index Retriever storage."
+        targetName={deleteFileTarget?.filename ?? deleteFileTarget?.file_id}
+        confirmLabel="Delete file"
+        confirmVariant="destructive"
+        onConfirm={() => {
+          const target = deleteFileTarget;
+          setDeleteFileTarget(null);
+          if (target) void deleteStoredFile(target.file_id);
+        }}
+      />
 
       <Card>
         <CardHeader>

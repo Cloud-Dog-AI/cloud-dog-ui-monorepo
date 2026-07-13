@@ -24,17 +24,24 @@ import {
   CardContent,
   CardHeader,
   DataTable,
+  DropdownMenu,
   EntityDialog,
+  JsonExplorer,
   RelativeTime,
+  formatBytes,
   type DataColumn,
+  type DropdownItem,
   type EntityFieldDef,
 } from "@cloud-dog/ui";
 import type { JsonRecord } from "../lib/types";
 import { useImapMcpState } from "../state/AppState";
 
 type ProfileListRow = Readonly<{
+  enabled?: boolean;
+  cacheBytes?: number | null;
   profileId: string;
   provider: string;
+  description: string;
   server: string;
   port: string;
   security: string;
@@ -48,6 +55,7 @@ type ProfileListRow = Readonly<{
 type ProfileDraft = Readonly<{
   profileId: string;
   provider: "imap_generic" | "gmail" | "exchange" | "outlook365";
+  description: string;
   host: string;
   port: number;
   security: "ssl" | "starttls" | "none";
@@ -57,17 +65,10 @@ type ProfileDraft = Readonly<{
   syncIntervalSeconds: number;
 }>;
 
-type LegacyProfileDraft = Readonly<{
-  profileId: string;
-  host: string;
-  maxAgeDays: string;
-  includeGlobs: string;
-  notes: string;
-}>;
-
 const defaultDraft: ProfileDraft = {
   profileId: "",
   provider: "imap_generic",
+  description: "",
   host: "",
   port: 993,
   security: "ssl",
@@ -84,18 +85,17 @@ const PROVIDER_DEFAULTS: Record<ProfileDraft["provider"], Partial<ProfileDraft>>
   outlook365: { host: "outlook.office365.com", port: 993, security: "ssl" },
 };
 
-const defaultLegacyDraft: LegacyProfileDraft = {
-  profileId: "",
-  host: "smtp.example.com",
-  maxAgeDays: "30",
-  includeGlobs: "INBOX",
-  notes: "",
-};
-
 const fields: EntityFieldDef[] = [
   { name: "profileId", label: "Channel ID", type: "text", required: true },
   // Exchange + outlook365 intentionally excluded — not yet implemented.
   { name: "provider", label: "Provider", type: "select", required: true, options: ["imap_generic", "gmail"] },
+  {
+    name: "description",
+    label: "Description (human-readable purpose of this channel)",
+    type: "text",
+    required: false,
+    placeholder: "e.g. Cloud-Dog operations alerts mailbox",
+  },
   { name: "host", label: "IMAP server", type: "text", required: true },
   { name: "port", label: "Port", type: "number", required: true },
   { name: "security", label: "Security", type: "select", required: true, options: ["ssl", "starttls", "none"] },
@@ -114,6 +114,7 @@ const fields: EntityFieldDef[] = [
 function buildPayload(draft: ProfileDraft): JsonRecord {
   return {
     provider: draft.provider,
+    description: draft.description.trim(),
     imap: {
       host: draft.host.trim(),
       port: Number(draft.port),
@@ -165,6 +166,7 @@ function readDraft(profileId: string, raw: JsonRecord): ProfileDraft {
   return {
     profileId,
     provider,
+    description: String(raw.description ?? raw.notes ?? ""),
     host: String(imap.host ?? raw.imap_host ?? ""),
     port: Number(imap.port ?? raw.imap_port ?? 993),
     security: String(imap.security ?? legacySecurity ?? "ssl") as ProfileDraft["security"],
@@ -189,9 +191,18 @@ function toListRow(profileId: string, raw: JsonRecord): ProfileListRow {
     ? raw.allowed_groups.map((g) => String(g))
     : [];
 
+  // IMAP-323 / IMAP-326: enabled state + cache bytes (best-effort: read from raw fields)
+  const enabled = raw.enabled === false ? false : true;
+  const cacheBytes = typeof raw.cache_bytes_used === "number"
+    ? raw.cache_bytes_used
+    : typeof raw.storage_bytes === "number"
+      ? raw.storage_bytes
+      : null;
+
   return {
     profileId,
     provider: String(raw.provider ?? "imap_generic"),
+    description: String(raw.description ?? raw.notes ?? ""),
     server: String(imap.host ?? raw.imap_host ?? "N/A"),
     port: String(imap.port ?? raw.imap_port ?? "N/A"),
     security: String(imap.security ?? legacySecurity ?? "N/A"),
@@ -199,6 +210,8 @@ function toListRow(profileId: string, raw: JsonRecord): ProfileListRow {
     allowedGroups,
     mailboxPattern: String(includeGlobs[0] ?? raw.default_folder ?? "INBOX"),
     lastSync: String(raw.last_sync_at ?? raw.updated_at ?? ""),
+    enabled,
+    cacheBytes,
     raw,
   };
 }
@@ -212,7 +225,7 @@ function validateDraft(draft: ProfileDraft): Record<string, string> {
     if (!draft.host.trim()) errors.host = "IMAP server is required.";
     if (!Number.isFinite(draft.port) || draft.port <= 0) errors.port = "Port must be numeric.";
     if (!draft.username.trim()) errors.username = "Username is required.";
-    if (!draft.password.trim()) errors.password = "example";
+    if (!draft.password.trim()) errors.password = "Password is required.";
   }
   if (!draft.mailboxPattern.trim()) errors.mailboxPattern = "Mailbox pattern is required.";
   if (!Number.isFinite(draft.syncIntervalSeconds) || draft.syncIntervalSeconds < 1) {
@@ -244,8 +257,6 @@ export function ProfilesPage() {
   const [mode, setMode] = React.useState<"add" | "edit">("add");
   const [page, setPage] = React.useState(1);
   const [pageSize, setPageSize] = React.useState(10);
-  const [legacyDraft, setLegacyDraft] = React.useState<LegacyProfileDraft>(defaultLegacyDraft);
-  const [profilePayload, setProfilePayload] = React.useState("{}");
   const [probeStatus, setProbeStatus] = React.useState("");
   const [gmailHasRefreshToken, setGmailHasRefreshToken] = React.useState<boolean | null>(null);
   const [perRowProbe, setPerRowProbe] = React.useState<Record<string, string>>({});
@@ -304,6 +315,7 @@ export function ProfilesPage() {
         : {
             profileId,
             provider: "unknown",
+            description: "",
             server: "Unavailable",
             port: "N/A",
             security: "Unknown",
@@ -362,57 +374,6 @@ export function ProfilesPage() {
     [api],
   );
 
-  const buildLegacyPayload = React.useCallback(
-    (draftValue: LegacyProfileDraft): JsonRecord => ({
-      provider: "imap_generic",
-      notes: draftValue.notes.trim(),
-      imap: {
-        host: draftValue.host.trim(),
-        port: 993,
-        security: "ssl",
-        tls: { allow_self_signed: false },
-        timeout_seconds: 15,
-      },
-      auth: { mode: "basic" },
-      credentials: {
-        username: `${draftValue.profileId.trim() || "profile"}@example.com`,
-        password: "example",
-      },
-      sync: {
-        retention: {
-          max_age_days: Number(draftValue.maxAgeDays || "30"),
-          max_total_bytes: 2147483648,
-          max_messages: 50000,
-        },
-        folder_policy: {
-          include_globs: draftValue.includeGlobs.split(",").map((item) => item.trim()).filter(Boolean),
-          exclude_globs: [],
-        },
-        parts_policy: {
-          cache_headers: true,
-          cache_bodies: true,
-          max_body_bytes: 200000,
-          cache_attachments: false,
-          max_attachment_bytes: 25000000,
-        },
-      },
-      sync_interval_seconds: 30,
-      write: { enabled: false },
-    }),
-    []
-  );
-
-  const syncLegacyFormToJson = React.useCallback(
-    (draftValue: LegacyProfileDraft) => {
-      setProfilePayload(JSON.stringify(buildLegacyPayload(draftValue), null, 2));
-    },
-    [buildLegacyPayload]
-  );
-
-  React.useEffect(() => {
-    syncLegacyFormToJson(legacyDraft);
-  }, [legacyDraft, syncLegacyFormToJson]);
-
   const openAdd = () => {
     if (!isAdmin) {
       setError("Profile creation requires admin access.");
@@ -435,21 +396,6 @@ export function ProfilesPage() {
       setError(detail.errorMessage || `Failed to load ${profileId}.`);
       return;
     }
-    const imap = (detail.data.imap ?? {}) as Record<string, unknown>;
-    const sync = (detail.data.sync ?? {}) as Record<string, unknown>;
-    const folderPolicy = (sync.folder_policy ?? {}) as Record<string, unknown>;
-    const includeGlobs = Array.isArray(folderPolicy.include_globs) ? folderPolicy.include_globs : [];
-    const retention = (sync.retention ?? {}) as Record<string, unknown>;
-    const notesValue = String(detail.data.notes ?? detail.data.description ?? "");
-    const nextLegacyDraft = {
-      profileId,
-      host: String(imap.host ?? ""),
-      maxAgeDays: String(retention.max_age_days ?? 30),
-      includeGlobs: includeGlobs.join(",") || "INBOX",
-      notes: notesValue,
-    } satisfies LegacyProfileDraft;
-    setLegacyDraft(nextLegacyDraft);
-    syncLegacyFormToJson(nextLegacyDraft);
     setMode("edit");
     setDraft(readDraft(profileId, detail.data));
     setErrors({});
@@ -492,6 +438,30 @@ export function ProfilesPage() {
     await load();
   };
 
+  // IMAP-323: toggle channel enabled/disabled flag.
+  const toggleEnabled = async (row: ProfileListRow) => {
+    const nextEnabled = row.enabled === false;
+    const updated = await api.upsertProfile(row.profileId, { ...row.raw, enabled: nextEnabled } as JsonRecord);
+    if (!updated.ok) {
+      setError(updated.errorMessage || `Failed to ${nextEnabled ? "enable" : "disable"} ${row.profileId}.`);
+      return;
+    }
+    setStatus(`${nextEnabled ? "Enabled" : "Disabled"} channel ${row.profileId}.`);
+    await load();
+  };
+
+  // IMAP-328: clear local cache for a channel.
+  const clearCache = async (row: ProfileListRow) => {
+    if (!window.confirm(`Clear local IMAP cache for ${row.profileId}?\nThis removes search-ledger entries and downloaded attachments for this channel.`)) return;
+    const result = await api.callTool<Record<string, unknown>>("mail_clear_cache", { profile_id: row.profileId });
+    if (!result.ok) {
+      setError(result.errorMessage || `Failed to clear cache for ${row.profileId}.`);
+      return;
+    }
+    setStatus(`Cleared cache for ${row.profileId}.`);
+    await load();
+  };
+
   const renderAuthStatus = (row: ProfileListRow) => {
     if (row.provider === "gmail") {
       if (gmailHasRefreshToken === true) return <Badge variant="default">Authorised</Badge>;
@@ -514,11 +484,33 @@ export function ProfilesPage() {
 
   const columns: DataColumn<ProfileListRow>[] = [
     {
+      // IMAP-321: Channel ID is a link to the detail view (opens the structured detail dialog).
       id: "profileId",
       header: "Channel ID",
-      cell: (row) => row.profileId,
+      cell: (row) => (
+        <button
+          type="button"
+          className="text-primary underline-offset-4 hover:underline font-mono text-xs"
+          onClick={() => setSelectedProfile(row)}
+          aria-label={`View channel ${row.profileId}`}
+        >
+          {row.profileId}
+        </button>
+      ),
       sortable: true,
       sortValue: (row) => row.profileId,
+    },
+    {
+      // IMAP-323: enabled/disabled state visible at a glance.
+      id: "enabled",
+      header: "Status",
+      cell: (row) => (
+        <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-medium ${row.enabled === false ? "bg-muted text-muted-foreground" : "bg-emerald-500/10 text-emerald-700"}`}>
+          {row.enabled === false ? "disabled" : "enabled"}
+        </span>
+      ),
+      sortable: true,
+      sortValue: (row) => (row.enabled === false ? "1-disabled" : "0-enabled"),
     },
     {
       id: "provider",
@@ -526,6 +518,18 @@ export function ProfilesPage() {
       cell: (row) => <span className="font-mono text-xs">{row.provider}</span>,
       sortable: true,
       sortValue: (row) => row.provider,
+    },
+    {
+      id: "description",
+      header: "Description",
+      cell: (row) =>
+        row.description ? (
+          <span className="text-xs" title={row.description}>{row.description}</span>
+        ) : (
+          <span className="text-xs text-muted-foreground">—</span>
+        ),
+      sortable: true,
+      sortValue: (row) => row.description,
     },
     { id: "server", header: "Server", cell: (row) => row.server, sortable: true, sortValue: (row) => row.server },
     { id: "port", header: "Port", cell: (row) => row.port, sortable: true, sortValue: (row) => row.port },
@@ -562,13 +566,39 @@ export function ProfilesPage() {
       sortable: true,
       sortValue: (row) => row.allowedGroups.join(","),
     },
-    { id: "mailbox", header: "Mailbox", cell: (row) => row.mailboxPattern },
+    {
+      // IMAP-327: per-row link → Mailbox Workspace filtered for that channel.
+      id: "mailbox",
+      header: "Mailbox",
+      cell: (row) => (
+        <Link
+          to={`/mailbox-workspace?profile=${encodeURIComponent(row.profileId)}`}
+          className="text-primary underline-offset-4 hover:underline text-xs"
+          title={`Open mailbox for ${row.profileId}`}
+        >
+          {row.mailboxPattern}
+        </Link>
+      ),
+    },
     {
       id: "lastSync",
       header: "Last Sync",
-      cell: (row) => (row.lastSync ? <RelativeTime timestamp={row.lastSync} /> : "N/A"),
+      // IMAP-325: time since last refresh (RelativeTime already moment-formats; backend wiring tracked as IMAP-329).
+      cell: (row) => (row.lastSync ? <RelativeTime timestamp={row.lastSync} /> : <span className="text-xs text-muted-foreground">never</span>),
       sortable: true,
       sortValue: (row) => row.lastSync,
+    },
+    {
+      // IMAP-326: local cache size column.
+      id: "cacheSize",
+      header: "Cache",
+      cell: (row) => (
+        <span className="text-xs font-mono">
+          {row.cacheBytes != null ? formatBytes(row.cacheBytes) : <span className="text-muted-foreground">—</span>}
+        </span>
+      ),
+      sortable: true,
+      sortValue: (row) => row.cacheBytes ?? -1,
     },
     {
       id: "test",
@@ -583,32 +613,30 @@ export function ProfilesPage() {
       ),
     },
     {
+      // IMAP-320: collapse multiple per-row actions into a single Dropdown to fix layout.
+      // IMAP-324: per-row Log link (audit) included.
       id: "actions",
       header: "Actions",
-      cell: (row) => (
-        <div className="flex flex-wrap gap-2">
-          <Button size="sm" variant="secondary" onClick={() => setSelectedProfile(row)}>View</Button>
-          <Link
-            to={`/diagnostics-audit?target_id=${encodeURIComponent(row.profileId)}`}
-            className="inline-flex items-center rounded-md border px-3 py-1 text-sm font-medium hover:bg-muted"
-            title={`View audit for channel ${row.profileId}`}
-          >
-            Audit
-          </Link>
-          {isAdmin ? (
-            <>
-              <Link
-                to={`/admin/api-keys?profileId=${encodeURIComponent(row.profileId)}`}
-                className="inline-flex items-center rounded-md border px-3 py-1 text-sm font-medium hover:bg-muted"
-              >
-                API Keys
-              </Link>
-              <Button size="sm" variant="secondary" onClick={() => void openEdit(row.profileId)}>Edit</Button>
-              <Button size="sm" variant="destructive" onClick={() => void remove(row.profileId)}>Delete</Button>
-            </>
-          ) : null}
-        </div>
-      ),
+      cell: (row) => {
+        const items: DropdownItem[] = [
+          { id: "view", label: "View detail", onSelect: () => setSelectedProfile(row) },
+          { id: "audit", label: "View audit log", onSelect: () => { window.location.assign(`/diagnostics-audit?target_id=${encodeURIComponent(row.profileId)}`); } },
+          { id: "mailbox", label: "Open in Mailbox", onSelect: () => { window.location.assign(`/mailbox-workspace?profile=${encodeURIComponent(row.profileId)}`); } },
+        ];
+        if (isAdmin) {
+          items.push({ id: "api-keys", label: "Manage API keys", onSelect: () => { window.location.assign(`/admin/api-keys?profileId=${encodeURIComponent(row.profileId)}`); } });
+          items.push({ id: "edit", label: "Edit channel", onSelect: () => void openEdit(row.profileId) });
+          items.push({ id: "toggle", label: row.enabled === false ? "Enable channel" : "Disable channel", onSelect: () => void toggleEnabled(row) });
+          items.push({ id: "clear-cache", label: "Clear cache", onSelect: () => void clearCache(row) });
+          items.push({ id: "delete", label: "Delete channel", onSelect: () => void remove(row.profileId) });
+        }
+        return (
+          <DropdownMenu
+            trigger={<Button size="sm" variant="ghost">Actions ▾</Button>}
+            items={items}
+          />
+        );
+      },
     },
   ];
 
@@ -648,6 +676,46 @@ export function ProfilesPage() {
             onPageSizeChange={setPageSize}
             columnPickerEnabled
             tableId="imap-channels"
+            selectable
+            bulkActions={isAdmin ? [
+              { label: "Disable selected", action: "bulk-disable" },
+              { label: "Enable selected", action: "bulk-enable" },
+              { label: "Clear cache on selected", action: "bulk-clear-cache" },
+              { label: "Export selected", action: "bulk-export" },
+            ] : [{ label: "Export selected", action: "bulk-export" }]}
+            onBulkAction={(action, ids) => {
+              const selected = rows.filter((r) => ids.includes(r.profileId));
+              if (action === "bulk-export") {
+                const blob = new Blob([JSON.stringify(selected.map(r => r.raw), null, 2)], { type: "application/json" });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement("a");
+                a.href = url; a.download = `channels-export-${Date.now()}.json`; a.click();
+                URL.revokeObjectURL(url);
+                return;
+              }
+              if (!isAdmin) return;
+              if (action === "bulk-disable" || action === "bulk-enable") {
+                const target = action === "bulk-enable";
+                if (!window.confirm(`${target ? "Enable" : "Disable"} ${selected.length} channel(s)?`)) return;
+                void (async () => {
+                  for (const row of selected) {
+                    await api.upsertProfile(row.profileId, { ...row.raw, enabled: target } as JsonRecord);
+                  }
+                  setStatus(`${target ? "Enabled" : "Disabled"} ${selected.length} channel(s).`);
+                  await load();
+                })();
+              }
+              if (action === "bulk-clear-cache") {
+                if (!window.confirm(`Clear local cache on ${selected.length} channel(s)?`)) return;
+                void (async () => {
+                  for (const row of selected) {
+                    await api.callTool("mail_clear_cache", { profile_id: row.profileId });
+                  }
+                  setStatus(`Cleared cache on ${selected.length} channel(s).`);
+                  await load();
+                })();
+              }
+            }}
           />
         </CardContent>
       </Card>
@@ -658,18 +726,94 @@ export function ProfilesPage() {
         title={selectedProfile ? `Channel detail — ${selectedProfile.profileId}` : "Channel detail"}
         body={
           selectedProfile ? (
-            <div className="space-y-3 max-h-[70vh] overflow-y-auto">
-              <div className="grid gap-2 md:grid-cols-2 text-sm">
-                <div><span className="text-muted-foreground">Channel:</span> <span className="font-mono">{selectedProfile.profileId}</span></div>
-                <div><span className="text-muted-foreground">Provider:</span> <span className="font-mono">{selectedProfile.provider}</span></div>
-                <div><span className="text-muted-foreground">Server:</span> <span className="font-mono">{selectedProfile.server}:{selectedProfile.port}</span></div>
-                <div><span className="text-muted-foreground">Security:</span> {selectedProfile.security}</div>
-                <div><span className="text-muted-foreground">Auth:</span> {selectedProfile.authMode}</div>
-                <div><span className="text-muted-foreground">Mailbox:</span> <span className="font-mono">{selectedProfile.mailboxPattern}</span></div>
-              </div>
-              <div className="rounded-md border bg-muted/30 p-3 text-xs">
-                <pre className="overflow-x-auto whitespace-pre-wrap font-mono">{JSON.stringify(selectedProfile.raw, null, 2)}</pre>
-              </div>
+            <div className="space-y-4 max-h-[70vh] overflow-y-auto">
+              {/* IMAP-330: structured layout — identity card, IMAP config, auth, sync, RBAC sections.
+                  IMAP-331: same shape used by Edit + View for consistency.
+                  Raw JSON exposed at the bottom via JsonExplorer table view (CX-140). */}
+              <section className="rounded-md border bg-background p-3">
+                <h3 className="text-sm font-semibold mb-2">Identity</h3>
+                <div className="grid gap-2 md:grid-cols-2 text-sm">
+                  <div><span className="text-muted-foreground">Channel ID:</span> <span className="font-mono">{selectedProfile.profileId}</span></div>
+                  <div><span className="text-muted-foreground">Provider:</span> <span className="font-mono">{selectedProfile.provider}</span></div>
+                  <div><span className="text-muted-foreground">Status:</span> {selectedProfile.enabled === false ? "disabled" : "enabled"}</div>
+                  <div><span className="text-muted-foreground">Mailbox pattern:</span> <span className="font-mono">{selectedProfile.mailboxPattern}</span></div>
+                  <div className="md:col-span-2"><span className="text-muted-foreground">Description:</span> {selectedProfile.description ? selectedProfile.description : <span className="text-muted-foreground">—</span>}</div>
+                </div>
+              </section>
+
+              <section className="rounded-md border bg-background p-3">
+                <h3 className="text-sm font-semibold mb-2">IMAP connection</h3>
+                <div className="grid gap-2 md:grid-cols-2 text-sm">
+                  <div><span className="text-muted-foreground">Host:</span> <span className="font-mono">{selectedProfile.server}</span></div>
+                  <div><span className="text-muted-foreground">Port:</span> <span className="font-mono">{selectedProfile.port}</span></div>
+                  <div><span className="text-muted-foreground">Security:</span> {selectedProfile.security}</div>
+                </div>
+              </section>
+
+              <section className="rounded-md border bg-background p-3">
+                <h3 className="text-sm font-semibold mb-2">Auth</h3>
+                <div className="grid gap-2 md:grid-cols-2 text-sm">
+                  <div><span className="text-muted-foreground">Mode:</span> <span className="font-mono">{selectedProfile.authMode}</span></div>
+                  <div>{renderAuthStatus(selectedProfile)}</div>
+                </div>
+              </section>
+
+              <section className="rounded-md border bg-background p-3">
+                <h3 className="text-sm font-semibold mb-2">Sync state</h3>
+                <div className="grid gap-2 md:grid-cols-2 text-sm">
+                  <div><span className="text-muted-foreground">Last sync:</span> {selectedProfile.lastSync ? <RelativeTime timestamp={selectedProfile.lastSync} /> : "never"}</div>
+                  <div><span className="text-muted-foreground">Cache size:</span> <span className="font-mono">{selectedProfile.cacheBytes != null ? formatBytes(selectedProfile.cacheBytes) : "—"}</span></div>
+                </div>
+              </section>
+
+              <section className="rounded-md border bg-background p-3">
+                <h3 className="text-sm font-semibold mb-2">RBAC</h3>
+                <div className="text-sm">
+                  <span className="text-muted-foreground">Allowed groups:</span>{" "}
+                  {selectedProfile.allowedGroups.length === 0
+                    ? <span className="text-muted-foreground">any (no binding)</span>
+                    : selectedProfile.allowedGroups.map((g) => (
+                        <Link key={g} to={`/admin/groups?groupId=${encodeURIComponent(g)}`} className="text-primary underline-offset-4 hover:underline font-mono text-xs mr-2">
+                          {g}
+                        </Link>
+                      ))}
+                </div>
+              </section>
+
+              <section className="rounded-md border bg-background p-3">
+                <h3 className="text-sm font-semibold mb-2">Quick actions</h3>
+                <div className="flex flex-wrap gap-2">
+                  <Link
+                    to={`/diagnostics-audit?target_id=${encodeURIComponent(selectedProfile.profileId)}`}
+                    className="inline-flex items-center rounded-md border px-3 py-1 text-sm font-medium hover:bg-muted"
+                  >
+                    View audit log
+                  </Link>
+                  <Link
+                    to={`/mailbox-workspace?profile=${encodeURIComponent(selectedProfile.profileId)}`}
+                    className="inline-flex items-center rounded-md border px-3 py-1 text-sm font-medium hover:bg-muted"
+                  >
+                    Open Mailbox
+                  </Link>
+                  {isAdmin ? (
+                    <>
+                      <Button size="sm" variant="secondary" onClick={() => { setSelectedProfile(null); void openEdit(selectedProfile.profileId); }}>Edit</Button>
+                      <Button size="sm" variant="secondary" onClick={() => void clearCache(selectedProfile)}>Clear cache</Button>
+                    </>
+                  ) : null}
+                </div>
+              </section>
+
+              {/* C-b (W28E-1863 fix-wave-b): collapse the advanced raw config behind a
+                  <details> so it is not expanded on open — mirrors the mailbox
+                  "Show raw message JSON (advanced)" pattern (FileBrowserPage). */}
+              <details className="rounded-md border bg-background p-3">
+                <summary className="cursor-pointer text-sm font-semibold">Raw configuration (advanced)</summary>
+                {/* CX-140: JsonExplorer in table view, drops the `root` wrapper. */}
+                <div className="mt-2">
+                  <JsonExplorer data={selectedProfile.raw} viewMode="table" maxDepth={6} hideInternalSearch />
+                </div>
+              </details>
             </div>
           ) : null
         }
@@ -706,6 +850,15 @@ export function ProfilesPage() {
                 <Button type="button" size="sm" variant="secondary" onClick={() => void runProbe()}>
                   Test / Verify connection
                 </Button>
+                {/* IMAP-332: Gmail re-authorisation option in Edit dialog. */}
+                {draft.provider === "gmail" ? (
+                  <Link
+                    to={`/gmail-settings?profile=${encodeURIComponent(draft.profileId)}`}
+                    className="inline-flex items-center rounded-md border border-primary px-3 py-1 text-sm font-medium text-primary hover:bg-primary/10"
+                  >
+                    Re-authorise Gmail
+                  </Link>
+                ) : null}
                 {probeStatus ? (
                   <span className="text-xs text-muted-foreground" role="status">{probeStatus}</span>
                 ) : null}

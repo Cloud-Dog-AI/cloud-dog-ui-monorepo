@@ -39,7 +39,7 @@ export function ApiDocsPage() {
   React.useEffect(() => {
     void Promise.all([
       api.listTools().then(setTools).catch(() => []),
-      fetch(`${a2aBaseUrl}/.well-known/agent.json`)
+      fetch(`${base}/.well-known/agent.json`)
         .then((response) => (response.ok ? response.json() : null))
         .then((card: Record<string, unknown> | null) => {
           if (!card) {
@@ -63,7 +63,7 @@ export function ApiDocsPage() {
           setSkills([]);
         }),
     ]);
-  }, [api, a2aBaseUrl]);
+  }, [api, base]);
 
   const [searchQuery, setSearchQuery] = React.useState("");
 

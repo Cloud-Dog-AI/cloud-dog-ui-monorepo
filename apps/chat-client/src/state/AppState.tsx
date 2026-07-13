@@ -16,10 +16,11 @@
 
 import * as React from "react";
 import { useAuth } from "@cloud-dog/auth";
-import { useConfig } from "@cloud-dog/config";
+import { useConfig } from "../lib/runtime-config";
 import type { ChatApi } from "../lib/api";
 import { createChatApi } from "../lib/api";
 import { isoNow } from "../lib/moment";
+import { isReadOnlyUser } from "../lib/rbac";
 import type {
   ChatProfileRecord,
   McpServer,
@@ -32,7 +33,6 @@ import type {
 
 type RuntimeConfig = {
   API_BASE_URL: string;
-  API_KEY_HEADER?: string;
   AUTH_MODE?: "cookie" | "api_key" | "oidc";
 };
 
@@ -101,7 +101,7 @@ export function AppStateProvider(props: { children: React.ReactNode }) {
   const auth = useAuth();
 
   const [apiKey, setApiKeyState] = React.useState<string>(() => safeStorageGet(API_KEY_STORAGE_KEY));
-  const [apiKeyHeader, setApiKeyHeader] = React.useState<string>(() => cfg.API_KEY_HEADER ?? "X-API-Key");
+  const [apiKeyHeader, setApiKeyHeader] = React.useState<string>("X-API-Key");
 
   const [uiConfig, setUiConfig] = React.useState<UiConfig | null>(null);
   const [uiConfigTree, setUiConfigTree] = React.useState<UiConfigTree | null>(null);
@@ -141,6 +141,7 @@ export function AppStateProvider(props: { children: React.ReactNode }) {
       }),
     [cfg.API_BASE_URL, apiKeyHeader, apiKey, onAuthError]
   );
+  const readOnlyUser = isReadOnlyUser(auth.user);
 
   const setApiKey = React.useCallback(
     (value: string) => {
@@ -277,10 +278,11 @@ export function AppStateProvider(props: { children: React.ReactNode }) {
     const fallback = mcpServers.map((server) => server.index);
     autoDefaultedSessionsRef.current.add(activeSessionId);
     setSelectedServerIndicesState(fallback);
+    if (readOnlyUser) return;
     void api.setSessionPreferences(activeSessionId, fallback).catch(() => {
       // Avoid blocking the UI if the persistence call fails.
     });
-  }, [activeSessionId, api, auth.isAuthenticated, mcpServers, selectedServerIndices.length]);
+  }, [activeSessionId, api, auth.isAuthenticated, mcpServers, readOnlyUser, selectedServerIndices.length]);
 
   const createSession = React.useCallback(
     async (title?: string, metadata: Record<string, unknown> = {}) => {
@@ -346,7 +348,7 @@ export function AppStateProvider(props: { children: React.ReactNode }) {
     async (indices: number[]) => {
       localSelectionDirtyRef.current = true;
       setSelectedServerIndicesState(indices);
-      if (!activeSessionId) return;
+      if (!activeSessionId || readOnlyUser) return;
       const requestSeq = selectionRequestSeqRef.current + 1;
       selectionRequestSeqRef.current = requestSeq;
 
@@ -379,7 +381,7 @@ export function AppStateProvider(props: { children: React.ReactNode }) {
 
       await pendingSelectionSyncRef.current;
     },
-    [activeSessionId, api]
+    [activeSessionId, api, readOnlyUser]
   );
 
   const awaitSelectedServerIndicesSync = React.useCallback(async () => {

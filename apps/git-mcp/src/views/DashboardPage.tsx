@@ -21,14 +21,14 @@ import {
   CardContent,
   CardHeader,
   DataTable,
-  HealthWidget,
   Input,
   MetricCard,
-  QuickActionBar,
   Select,
   ResourceMetrics,
   Spinner,
   StructuredView,
+  formatSeconds,
+  useAuditLink,
   type DataColumn,
 } from "@cloud-dog/ui";
 import { useGitMcpState } from "../state/AppState";
@@ -82,7 +82,9 @@ function emptyStatus(): UiStatusPayload {
 export function DashboardPage() {
   const navigate = useNavigate();
   const { api, apiKey } = useGitMcpState();
+  const { linkToCorrelation } = useAuditLink();
   const [status, setStatus] = React.useState<UiStatusPayload>(emptyStatus());
+  const [workspaceCount, setWorkspaceCount] = React.useState(0);
   const [recentRows, setRecentRows] = React.useState<ServerLogRow[]>([]);
   const [activeSource, setActiveSource] = React.useState("audit");
   const [query, setQuery] = React.useState("");
@@ -98,12 +100,15 @@ export function DashboardPage() {
   const refresh = React.useCallback(async () => {
     setIsLoading(true);
     try {
-      const [nextStatus, nextRows] = await Promise.all([
+      const [nextStatus, nextRows, workspaces] = await Promise.all([
         api.getStatus(),
         api.listServerLogs(apiKey, activeSource, 100, deferredQuery.trim()),
+        // GMC-D-05: owner-scoped live count (resets with backend; no stale 692).
+        api.listWorkspaces(apiKey, "me").catch(() => []),
       ]);
       setStatus(nextStatus);
       setRecentRows(nextRows);
+      setWorkspaceCount(workspaces.length);
       setError(null);
       setStatusMessage(`Loaded ${nextRows.length} ${sourceLabel(activeSource)} entries.`);
     } catch (loadError) {
@@ -227,11 +232,21 @@ export function DashboardPage() {
     },
     {
       id: "actions",
-      header: "Inspect",
+      header: "Actions",
       cell: (row) => (
-        <Button type="button" size="sm" variant="secondary" onClick={() => setSelectedRow(row)}>
-          View
-        </Button>
+        <div className="flex flex-wrap gap-1">
+          <Button type="button" size="sm" variant="secondary" onClick={() => setSelectedRow(row)}>
+            View
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            variant="secondary"
+            onClick={() => navigate(linkToCorrelation(row.correlationId || row.correlation_id || row.requestId || row.request_id || ""))}
+          >
+            Actions › View Audit
+          </Button>
+        </div>
       ),
     },
   ];
@@ -253,35 +268,27 @@ export function DashboardPage() {
         </div>
       ) : null}
 
+      {/* GMC-D-03: Resource Metrics sits at the top, directly under the Dashboard heading. */}
+      <Card>
+        <CardHeader>
+          <h2 className="text-lg font-semibold">Resource Metrics</h2>
+        </CardHeader>
+        <CardContent>
+          <ResourceMetrics metrics={status.metrics.length ? status.metrics : emptyStatus().metrics} />
+        </CardContent>
+      </Card>
+
       <DashboardLayout
-        healthWidgets={status.services.map((service) => (
-          <HealthWidget
-            key={service.name}
-            name={service.name}
-            status={service.status}
-            detail={service.url}
-            url={service.url}
-            className="min-w-[15rem] flex-1"
-          />
-        ))}
         metricCards={[
-          <MetricCard key="workspaces" label="Workspaces" value={status.service_metrics.workspace_count} />,
-          <MetricCard key="repo-size" label="Repo Size" value={status.service_metrics.total_repo_size_mb.toFixed(1)} unit="MiB" />,
+          <MetricCard key="workspaces" label="Workspaces" value={workspaceCount} />,
+          <MetricCard key="uptime" label="Uptime" value={formatSeconds(status.uptime_seconds)} />,
           <MetricCard key="profiles" label="Profiles" value={status.service_metrics.profile_count} />,
           <MetricCard key="connections" label="Connections" value={status.active_connections} />,
+          <MetricCard key="repo-size" label="Repo Size" value={status.service_metrics.total_repo_size_mb.toFixed(1)} unit="MiB" />,
         ]}
-        quickActions={
-          <QuickActionBar
-            actions={[
-              { label: "Browse Workspaces", onClick: () => navigate("/workspace") },
-              { label: "Add Profile", onClick: () => navigate("/profiles") },
-              { label: "View Diagnostics", onClick: () => navigate("/workspace") },
-              { label: "Review Jobs", onClick: () => navigate("/jobs") },
-            ]}
-          />
-        }
         recentActivity={
           <div className="space-y-3">
+            <h2 className="text-lg font-semibold">Recent Activity</h2>
             <div className="flex flex-wrap items-end gap-3">
               <label className="space-y-1 text-sm">
                 <span>Log source</span>
@@ -334,16 +341,7 @@ export function DashboardPage() {
             ) : null}
           </div>
         }
-      >
-        <Card>
-          <CardHeader>
-            <h2 className="text-lg font-semibold">Resource metrics</h2>
-          </CardHeader>
-          <CardContent>
-            <ResourceMetrics metrics={status.metrics.length ? status.metrics : emptyStatus().metrics} />
-          </CardContent>
-        </Card>
-      </DashboardLayout>
+      ></DashboardLayout>
 
       {selectedRow ? (
         <StructuredView title="Log Entry" value={selectedRow.raw ?? selectedRow} />

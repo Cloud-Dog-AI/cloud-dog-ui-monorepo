@@ -66,7 +66,8 @@ export function ConfirmDialog(props: ConfirmDialogProps) {
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange} label={title}>
-      <div className="space-y-4">
+      {/* PS-77 CW-F6 — confirmation dialog for destructive actions. */}
+      <div className="space-y-4" data-testid="CW-F6">
         <h2 className="text-lg font-semibold">{title}</h2>
         <p className="text-sm text-muted-foreground">{description}</p>
         {targetName && (

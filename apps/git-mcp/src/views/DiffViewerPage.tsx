@@ -15,7 +15,7 @@
 // @cloud-dog/app-git-mcp — Diff viewer page for ref-to-ref comparison and file-level change summaries.
 
 import * as React from "react";
-import { Badge, Button, Card, CardContent, CardHeader, DataTable, Input, JsonBlock, Label, Tabs, TabsContent, TabsList, TabsTrigger, type DataColumn } from "@cloud-dog/ui";
+import { Badge, Button, Card, CardContent, CardHeader, Combobox, DataTable, JsonBlock, Label, Tabs, TabsContent, TabsList, TabsTrigger, type ComboboxOption, type DataColumn } from "@cloud-dog/ui";
 import { useGitMcpState } from "../state/AppState";
 import { buildWorkspaceOpenArgs, useWorkspaceSession, WorkspaceSessionCard } from "./WorkspaceSessionCard";
 import { parseDiffSummary, parseUnifiedDiff, type DiffLine, type DiffSummaryRow } from "../lib/gitUi";
@@ -37,6 +37,39 @@ export function DiffViewerPage() {
   const [summaryRows, setSummaryRows] = React.useState<DiffSummaryRow[]>([]);
   const [status, setStatus] = React.useState("");
   const [error, setError] = React.useState<string | null>(null);
+  // GM-DV-01: left/right refs are populated comboboxes (branches + tags); allowCustom keeps commit-ish
+  // refs (HEAD, HEAD~1, raw hashes) usable.
+  const [refOptions, setRefOptions] = React.useState<ComboboxOption[]>([]);
+
+  React.useEffect(() => {
+    if (!session.workspaceId) {
+      setRefOptions([]);
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      try {
+        const [branches, tags] = await Promise.all([
+          app.api.listWorkspaceRefs(app.apiKey, session.workspaceId, "branch"),
+          app.api.listWorkspaceRefs(app.apiKey, session.workspaceId, "tag"),
+        ]);
+        if (cancelled) return;
+        const seen = new Set<string>();
+        const merged: ComboboxOption[] = [];
+        for (const row of [...branches, ...tags]) {
+          if (seen.has(row.value)) continue;
+          seen.add(row.value);
+          merged.push({ value: row.value, label: row.label });
+        }
+        setRefOptions(merged);
+      } catch {
+        // Selectors degrade gracefully to free-text ref entry (Combobox allowCustom).
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [app.api, app.apiKey, session.workspaceId]);
 
   const openWorkspace = React.useCallback(async () => {
     setError(null);
@@ -89,17 +122,17 @@ export function DiffViewerPage() {
         onOpenWorkspace={openWorkspace}
         status={status}
         error={error}
-        title="Diff context"
+        title="Diff Context"
         actions={
           <>
-            <label className="space-y-2">
-              <Label htmlFor="diff-left-ref">Left ref</Label>
-              <Input id="diff-left-ref" value={leftRef} onChange={(event) => setLeftRef(event.target.value)} />
-            </label>
-            <label className="space-y-2">
-              <Label htmlFor="diff-right-ref">Right ref</Label>
-              <Input id="diff-right-ref" value={rightRef} onChange={(event) => setRightRef(event.target.value)} />
-            </label>
+            <div className="space-y-2">
+              <Label>Left ref</Label>
+              <Combobox aria-label="Left ref" options={refOptions} value={leftRef} onChange={setLeftRef} allowCustom placeholder="Left ref (branch, tag, or commit)" />
+            </div>
+            <div className="space-y-2">
+              <Label>Right ref</Label>
+              <Combobox aria-label="Right ref" options={refOptions} value={rightRef} onChange={setRightRef} allowCustom placeholder="Right ref (branch, tag, or commit)" />
+            </div>
             <Button variant="secondary" onClick={() => void loadDiff()} disabled={!session.workspaceId}>Compare refs</Button>
           </>
         }

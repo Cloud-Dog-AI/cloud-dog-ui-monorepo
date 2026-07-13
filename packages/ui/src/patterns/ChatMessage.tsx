@@ -26,6 +26,13 @@ export type ChatMessageProps = Readonly<{
   timestamp?: string;
   footer?: React.ReactNode;
   className?: string;
+  /**
+   * Optional human display name shown in the message header instead of the raw
+   * role. Callers pass the logged-in user's name for their own messages so the
+   * header reads e.g. "Ada Lovelace" rather than "USER" (CL-25, W28E-1876).
+   * Falls back to the role when absent.
+   */
+  displayName?: string;
 }>;
 
 function renderContent(content: string): React.ReactNode {
@@ -97,7 +104,7 @@ export function ChatMessage(props: ChatMessageProps) {
               isUser ? "text-primary-foreground" : "opacity-80"
             )}
           >
-            {props.role}
+            {props.displayName && props.displayName.trim() ? props.displayName : props.role}
           </span>
           {props.timestamp ? (
             <RelativeTime

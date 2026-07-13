@@ -24,8 +24,8 @@
 
 import * as React from "react";
 import { useTheme } from "@cloud-dog/shell";
-import { Badge, Button, Card, CardContent, CardHeader, Input, JsonBlock, JsonExplorer, SettingsPanel } from "@cloud-dog/ui";
-import type { JsonExplorerSourceMap, SettingGroupDef } from "@cloud-dog/ui";
+import { Badge, Card, CardContent, CardHeader, JsonBlock, SettingsPanel } from "@cloud-dog/ui";
+import type { JsonExplorerSourceMap, SettingGroupDef, SettingsPanelServerTab } from "@cloud-dog/ui";
 import { useAppState } from "../state/AppState";
 
 const SERVER_TABS = [
@@ -87,7 +87,7 @@ export function SettingsPage() {
   const { theme, setTheme } = useTheme();
   const { api, uiConfig, apiKeyHeader } = useAppState();
 
-  const [configTree, setConfigTree] = React.useState<Record<string, unknown>>({});
+  const [effectiveConfig, setEffectiveConfig] = React.useState<Record<string, unknown>>({});
   const [sources, setSources] = React.useState<JsonExplorerSourceMap>({});
   const [counts, setCounts] = React.useState<Record<string, unknown>>({});
   const [activeTab, setActiveTab] = React.useState<ServerTab>("all");
@@ -104,7 +104,7 @@ export function SettingsPage() {
     setError(null);
     try {
       const [tree, src] = await Promise.all([api.getUiConfigTree(), api.getUiConfigSources()]);
-      setConfigTree((tree.config ?? {}) as Record<string, unknown>);
+      setEffectiveConfig((tree.config ?? {}) as Record<string, unknown>);
       setSources((src.sources ?? {}) as JsonExplorerSourceMap);
       setCounts(src.counts ?? {});
       setStatus("Loaded global config tree (secrets masked)");
@@ -119,9 +119,19 @@ export function SettingsPage() {
     if (saved === "dark" || saved === "light") setTheme(saved);
   }, [setTheme, theme]);
 
-  const tabData = React.useMemo(() => filterByServer(configTree, activeTab), [configTree, activeTab]);
   const totalKeys = typeof counts.total === "number" ? (counts.total as number) : Object.keys(sources).length;
   const secretCount = typeof counts.secret === "number" ? (counts.secret as number) : listSecretPaths(sources).length;
+  const serverTabs = React.useMemo<SettingsPanelServerTab[]>(
+    () =>
+      SERVER_TABS.map((server) => ({
+        id: server.id,
+        label: server.label,
+        data: filterByServer(effectiveConfig, server.id),
+        sources,
+        description: "Config tree",
+      })),
+    [effectiveConfig, sources],
+  );
 
   const onRevealConfirm = async () => {
     setConfirmReveal(false);
@@ -134,7 +144,7 @@ export function SettingsPage() {
     }
   };
   const onExport = () => {
-    const masked = redactForExport(configTree, sources, "");
+    const masked = redactForExport(effectiveConfig, sources, "");
     const blob = new Blob([JSON.stringify(masked, null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -160,93 +170,35 @@ export function SettingsPage() {
 
   return (
     <div className="space-y-4" data-testid="settings-page">
-      <header>
-        <h1 className="text-2xl font-semibold">Settings</h1>
-        <p className="text-sm text-muted-foreground">
-          Effective global configuration (PS-73 v2) across all servers ·{" "}
-          <span data-testid="settings-key-count">{totalKeys}</span> keys · {secretCount} secrets · source-attributed.
-          API key header: <span className="font-mono">{apiKeyHeader}</span>
-        </p>
-      </header>
-
-      {error ? <p role="alert" className="text-sm text-destructive">{error}</p> : null}
-      {status ? <p role="status" className="text-sm text-emerald-700">{status}</p> : null}
-
-      {/* PS-73 v2 SW11 — page-level search across keys AND values, all servers. */}
-      <div className="flex flex-col gap-3 lg:flex-row lg:items-center">
-        <Input
-          data-testid="settings-search"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          placeholder="Search settings — keys and values, across all servers"
-          aria-label="Search settings"
-          className="flex-1"
-        />
-        <div className="flex flex-wrap gap-2">
-          <Button variant="secondary" onClick={() => void loadGlobalConfig()}>Show global config</Button>
-          {revealed.size > 0 ? (
-            <Button data-testid="settings-hide-secrets" variant="secondary" onClick={() => { setRevealed(new Set()); setStatus("Secrets re-masked."); }}>Hide secrets</Button>
-          ) : (
-            <Button data-testid="settings-reveal-secrets" variant="secondary" onClick={() => setConfirmReveal(true)}>Reveal secrets</Button>
-          )}
-          <Button data-testid="settings-export" onClick={onExport}>Download effective config</Button>
-        </div>
-      </div>
-
-      {confirmReveal ? (
-        <Card data-testid="settings-reveal-confirm">
-          <CardContent className="flex flex-col gap-2 py-4">
-            <p className="text-sm">Revealing secret values is audit-logged (PS-40) and ephemeral. Confirm?</p>
-            <div className="flex gap-2">
-              <Button data-testid="settings-reveal-confirm-yes" variant="destructive" onClick={() => void onRevealConfirm()}>Confirm reveal</Button>
-              <Button variant="secondary" onClick={() => setConfirmReveal(false)}>Cancel</Button>
-            </div>
-          </CardContent>
-        </Card>
-      ) : null}
-
-      {/* PS-73 v2 SW9 — per-server segmentation tabs. */}
-      <div className="flex flex-wrap gap-2 border-b" role="tablist" aria-label="Settings server tabs">
-        {SERVER_TABS.map((tab) => (
-          <button
-            key={tab.id}
-            type="button"
-            role="tab"
-            aria-selected={activeTab === tab.id}
-            data-testid={`settings-server-tab-${tab.id}`}
-            onClick={() => setActiveTab(tab.id)}
-            className={"rounded-t-md px-4 py-2 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-ring " + (activeTab === tab.id ? "border-b-2 border-primary text-foreground" : "text-muted-foreground hover:text-foreground")}
-          >
-            {tab.label}
-          </button>
-        ))}
-      </div>
-
-      {/* PS-73 v2 SW1/SW10 — PS-81 JsonExplorer is the primary config widget. */}
-      <Card>
-        <CardHeader>
-          <h2 className="text-lg font-semibold">Config tree — {SERVER_TABS.find((t) => t.id === activeTab)?.label}</h2>
-          <p className="text-sm text-muted-foreground">Effective configuration, secrets masked, source-attributed.</p>
-        </CardHeader>
-        <CardContent>
-          <JsonExplorer
-            title="Config tree"
-            data={tabData}
-            sources={sources}
-            searchTerm={search}
-            revealedSecrets={revealed}
-            hideInternalSearch
-            defaultExpanded={false}
-            maxDepth={20}
-          />
-        </CardContent>
-      </Card>
-
-      {/* Operator preferences (preserved). */}
-      <Card>
-        <CardHeader><h2 className="text-lg font-semibold">Operator preferences</h2></CardHeader>
-        <CardContent><SettingsPanel groups={prefGroups} onSave={onSavePref} onExport={onExport} /></CardContent>
-      </Card>
+      <SettingsPanel
+        title="Settings"
+        serviceName="chat-client"
+        description={`Effective global configuration across all servers. API key header: ${apiKeyHeader}`}
+        statusItems={[
+          { label: "keys", value: totalKeys, testId: "settings-key-count" },
+          { label: "secrets", value: secretCount },
+        ]}
+        serverTabs={serverTabs}
+        activeServerId={activeTab}
+        onActiveServerChange={(serverId) => setActiveTab(serverId as ServerTab)}
+        searchTerm={search}
+        onSearchTermChange={setSearch}
+        revealedSecrets={revealed}
+        maxDepth={20}
+        error={error}
+        groups={prefGroups}
+        onSave={onSavePref}
+        onRefresh={() => void loadGlobalConfig()}
+        onExport={onExport}
+        secretsRevealed={revealed.size > 0}
+        onRevealSecrets={revealed.size > 0 ? () => { setRevealed(new Set()); setStatus("Secrets re-masked."); } : () => setConfirmReveal(true)}
+        revealSecretsLabel="Reveal secrets"
+        hideSecretsLabel="Hide secrets"
+        confirmRevealOpen={confirmReveal}
+        onConfirmReveal={() => void onRevealConfirm()}
+        onCancelReveal={() => setConfirmReveal(false)}
+        footer={status ? <p role="status" className="text-sm text-emerald-700">{status}</p> : null}
+      >
 
       {/* Health. */}
       <Card>
@@ -261,6 +213,7 @@ export function SettingsPage() {
           />
         </CardContent>
       </Card>
+      </SettingsPanel>
     </div>
   );
 }

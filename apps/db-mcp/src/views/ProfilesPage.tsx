@@ -16,20 +16,30 @@ import * as React from "react";
 import { useAuth } from "@cloud-dog/auth";
 import {
   Badge,
+  HelpTip,
   Button,
   Checkbox,
   ConfirmDialog,
+  ConnectionPicker,
   DataTable,
-  EntityDialog,
+  Dialog,
+  DiscoveredMultiSelect,
+  Input,
   Label,
+  ScopeTestPanel,
   Textarea,
+  createDataTableActionColumn,
   type BulkAction,
+  type ConnectionPickerOption,
   type DataColumn,
-  type EntityFieldDef,
+  type DiscoveredOption,
+  type ScopeTestResult,
 } from "@cloud-dog/ui";
+import { FieldMaskEditor } from "../components/FieldMaskEditor";
 import { canManageProfiles } from "../lib/access";
+import { exportRowsJson } from "../lib/exportRows";
 import { useDbMcpState } from "../state/AppState";
-import type { ProfileDraft, ProfileSummary } from "../lib/types";
+import type { EntityItem, PrincipalSummary, ProfileDraft, ProfileScopeTestApiResult, ProfileSummary, SourceConnectionSummary } from "../lib/types";
 
 type DialogMode = "add" | "edit" | "view";
 
@@ -38,27 +48,19 @@ type ProfileFormState = Readonly<{
   source_type: string;
   source_connection: string;
   description: string;
-  namespacesCsv: string;
-  entitiesCsv: string;
-  fieldMasksJson: string;
-  fieldExclusionsCsv: string;
+  namespaces: string[];
+  entities: string[];
+  field_masks: Record<string, string>;
+  field_exclusions: string[];
   enabled_tools: string[];
   allowed_permissions: string[];
   index_enabled: boolean;
   index_include_content: boolean;
-  index_content_fields_csv: string;
+  index_content_fields: string[];
   index_max_documents: string;
 }>;
 
-const TOOL_OPTIONS = [
-  "catalog",
-  "schema",
-  "content",
-  "relationship",
-  "data",
-  "index",
-  "audit",
-] as const;
+const TOOL_OPTIONS = ["catalog", "schema", "content", "relationship", "data", "index", "audit"] as const;
 
 const PERMISSION_OPTIONS = [
   "catalog.read",
@@ -76,25 +78,15 @@ const PERMISSION_OPTIONS = [
   "audit.read",
 ] as const;
 
-const SOURCE_TYPES = ["mongodb", "mariadb", "postgresql", "elasticsearch", "opensearch", "couchdb", "cassandra"];
-const SOURCE_CONNECTIONS = ["default", "primary", "secondary", "analytics", "archive"];
-
-const PROFILE_FIELDS: EntityFieldDef[] = [
-  { name: "name", label: "Name — unique display name for this profile", type: "text", required: true },
-  { name: "source_type", label: "Source type — database engine (independent of connection slot)", type: "select", options: SOURCE_TYPES },
-  { name: "source_connection", label: "Source connection — named endpoint slot", type: "select", options: SOURCE_CONNECTIONS },
-  { name: "description", label: "Description", type: "text" },
-  { name: "namespacesCsv", label: "Namespaces (comma-separated, e.g. sales_db, analytics_db)", type: "text" },
-  { name: "entitiesCsv", label: "Entities (comma-separated, e.g. customers, orders)", type: "text" },
-];
-
-const EMPTY_PROFILE: ProfileDraft = {
+const EMPTY_FORM: ProfileFormState = {
   name: "",
-  source_type: "mongodb",
-  source_connection: "default",
+  source_type: "",
+  source_connection: "",
   description: "",
   namespaces: [],
   entities: [],
+  field_masks: {},
+  field_exclusions: [],
   enabled_tools: ["catalog", "schema", "content", "relationship", "data", "index"],
   allowed_permissions: [
     "catalog.read",
@@ -111,19 +103,56 @@ const EMPTY_PROFILE: ProfileDraft = {
     "profile.manage",
     "audit.read",
   ],
-  field_masks: {},
-  field_exclusions: [],
-  index_policy: { enabled: true, include_content: true, content_fields: ["name", "email", "product"], max_documents: 10000 },
+  index_enabled: true,
+  index_include_content: true,
+  index_content_fields: [],
+  index_max_documents: "10000",
 };
 
-function parseCsv(value: string): string[] {
-  return value.split(",").map((item) => item.trim()).filter(Boolean);
+function toFormState(profile: ProfileSummary | null): ProfileFormState {
+  if (!profile) return EMPTY_FORM;
+  const indexPolicy = profile.index_policy ?? {};
+  const contentFields = Array.isArray(indexPolicy.content_fields)
+    ? indexPolicy.content_fields.map((item) => String(item))
+    : [];
+
+  return {
+    name: profile.name,
+    source_type: profile.source_type,
+    source_connection: profile.source_connection,
+    description: profile.description,
+    namespaces: [...profile.namespaces],
+    entities: [...profile.entities],
+    field_masks: { ...profile.field_masks },
+    field_exclusions: [...profile.field_exclusions],
+    enabled_tools: [...profile.enabled_tools],
+    allowed_permissions: [...profile.allowed_permissions],
+    index_enabled: Boolean(indexPolicy.enabled ?? true),
+    index_include_content: Boolean(indexPolicy.include_content ?? true),
+    index_content_fields: contentFields,
+    index_max_documents: String(indexPolicy.max_documents ?? "10000"),
+  };
 }
 
-function parseJsonRecord(value: string): Record<string, string> {
-  if (!value.trim()) return {};
-  const parsed = JSON.parse(value) as Record<string, unknown>;
-  return Object.fromEntries(Object.entries(parsed).map(([key, entry]) => [key, String(entry)]));
+function toDraft(form: ProfileFormState): ProfileDraft {
+  return {
+    name: form.name.trim(),
+    source_type: form.source_type.trim(),
+    source_connection: form.source_connection.trim(),
+    description: form.description.trim(),
+    namespaces: [...form.namespaces],
+    entities: [...form.entities],
+    enabled_tools: [...form.enabled_tools],
+    allowed_permissions: [...form.allowed_permissions],
+    field_masks: { ...form.field_masks },
+    field_exclusions: [...form.field_exclusions],
+    index_policy: {
+      enabled: form.index_enabled,
+      include_content: form.index_include_content,
+      content_fields: [...form.index_content_fields],
+      max_documents: form.index_max_documents.trim() ? Number(form.index_max_documents) : undefined,
+    },
+  };
 }
 
 function toggleListValue(values: string[], nextValue: string, checked: boolean): string[] {
@@ -131,85 +160,182 @@ function toggleListValue(values: string[], nextValue: string, checked: boolean):
   return values.filter((value) => value !== nextValue);
 }
 
-function toFormState(profile: ProfileSummary | null): ProfileFormState {
-  const source = profile ?? EMPTY_PROFILE;
-  const indexPolicy = source.index_policy ?? {};
-  const contentFields = Array.isArray(indexPolicy.content_fields)
-    ? indexPolicy.content_fields.map((item) => String(item))
-    : [];
+function serverPrincipalCanManageProfiles(principal: PrincipalSummary | null): boolean {
+  const roles = principal?.roles ?? [];
+  const permissions = principal?.permissions ?? [];
+  return roles.includes("admin") || roles.includes("data_steward") || permissions.includes("*") || permissions.includes("profile.manage");
+}
 
+function connectionToOption(connection: SourceConnectionSummary): ConnectionPickerOption {
   return {
-    name: source.name,
-    source_type: source.source_type,
-    source_connection: source.source_connection,
-    description: source.description,
-    namespacesCsv: source.namespaces.join(", "),
-    entitiesCsv: source.entities.join(", "),
-    fieldMasksJson: JSON.stringify(source.field_masks, null, 2),
-    fieldExclusionsCsv: source.field_exclusions.join(", "),
-    enabled_tools: [...source.enabled_tools],
-    allowed_permissions: [...source.allowed_permissions],
-    index_enabled: Boolean(indexPolicy.enabled ?? true),
-    index_include_content: Boolean(indexPolicy.include_content ?? true),
-    index_content_fields_csv: contentFields.join(", "),
-    index_max_documents: String(indexPolicy.max_documents ?? ""),
+    name: connection.name,
+    sourceType: connection.source_type,
+    status: connection.status,
+    description: connection.description,
+  };
+}
+
+function itemsToOptions(items: Array<{ name: string; type?: string; types?: string[] }>): DiscoveredOption[] {
+  return items.map((item) => ({
+    value: item.name,
+    label: item.type ? `${item.name} (${item.type})` : item.types?.length ? `${item.name} (${item.types.join("|")})` : item.name,
+  }));
+}
+
+function scopeTestToPanelResult(result: ProfileScopeTestApiResult): ScopeTestResult {
+  const accessible = [
+    ...(result.namespaces ?? []).map((namespace) => ({ namespace: namespace.name })),
+    ...Object.entries(result.entities_by_namespace ?? {}).flatMap(([namespace, entities]) =>
+      entities.map((entity: EntityItem) => ({ namespace, entity: entity.name }))
+    ),
+  ];
+  return {
+    status: result.ok ? "OK" : "FAIL",
+    latencyMs: result.latency_ms,
+    accessible,
+    errors: result.ok || !result.error ? [] : [result.error],
   };
 }
 
 export function ProfilesPage() {
   const auth = useAuth();
   const { api, profiles, refreshProfiles, selectedProfileId, setSelectedProfileId } = useDbMcpState();
+  const [principal, setPrincipal] = React.useState<PrincipalSummary | null>(null);
+  const [sourceConnections, setSourceConnections] = React.useState<SourceConnectionSummary[]>([]);
   const [selectedProfile, setSelectedProfile] = React.useState<ProfileSummary | null>(null);
   const [dialogMode, setDialogMode] = React.useState<DialogMode>("add");
   const [dialogOpen, setDialogOpen] = React.useState(false);
-  const [form, setForm] = React.useState<ProfileFormState>(toFormState(null));
+  const [form, setForm] = React.useState<ProfileFormState>(EMPTY_FORM);
+  const [namespaceOptions, setNamespaceOptions] = React.useState<DiscoveredOption[]>([]);
+  const [entityOptions, setEntityOptions] = React.useState<DiscoveredOption[]>([]);
+  const [fieldOptions, setFieldOptions] = React.useState<DiscoveredOption[]>([]);
   const [page, setPage] = React.useState(1);
   const [status, setStatus] = React.useState("");
   const [error, setError] = React.useState<string | null>(null);
+  const [discoveryError, setDiscoveryError] = React.useState<string | null>(null);
+  const [discoveryLoading, setDiscoveryLoading] = React.useState(false);
+  const [scopeRunning, setScopeRunning] = React.useState(false);
+  const [scopeResult, setScopeResult] = React.useState<ScopeTestResult | null>(null);
   const [confirmDelete, setConfirmDelete] = React.useState<ProfileSummary | null>(null);
 
-  const mayEditProfiles = canManageProfiles(auth.user);
+  const mayEditProfiles = canManageProfiles(auth.user) || serverPrincipalCanManageProfiles(principal);
   const dialogReadOnly = dialogMode === "view" || !mayEditProfiles;
+
+  const connectionOptions = React.useMemo(() => sourceConnections.map(connectionToOption), [sourceConnections]);
+  const effectiveConnectionOptions = React.useMemo(() => {
+    if (!form.source_connection || connectionOptions.some((option) => option.name === form.source_connection)) {
+      return connectionOptions;
+    }
+    return [
+      ...connectionOptions,
+      {
+        name: form.source_connection,
+        label: `${form.source_connection} (stale)`,
+        sourceType: form.source_type || "unknown",
+        status: "stale",
+        disabled: true,
+      },
+    ];
+  }, [connectionOptions, form.source_connection, form.source_type]);
+
+  const loadSourceConnections = React.useCallback(async () => {
+    setSourceConnections(await api.listSourceConnections());
+  }, [api]);
 
   React.useEffect(() => {
     void refreshProfiles();
-  }, [refreshProfiles]);
+    void loadSourceConnections().catch((loadError) => {
+      setError(loadError instanceof Error ? loadError.message : "Failed to load source connections.");
+    });
+    api.currentPrincipal()
+      .then(setPrincipal)
+      .catch(() => setPrincipal(null));
+  }, [api, loadSourceConnections, refreshProfiles]);
 
-  const openDialog = (mode: DialogMode, profile: ProfileSummary | null = null) => {
+  async function loadNamespaces(connectionName: string, refresh = false) {
+    if (!connectionName) {
+      setNamespaceOptions([]);
+      return;
+    }
+    setDiscoveryLoading(true);
+    setDiscoveryError(null);
+    try {
+      const discovered = await api.discoverNamespaces({ connection_name: connectionName, refresh });
+      setNamespaceOptions(itemsToOptions(discovered.items));
+    } catch (loadError) {
+      setDiscoveryError(loadError instanceof Error ? loadError.message : "Failed to discover namespaces.");
+    } finally {
+      setDiscoveryLoading(false);
+    }
+  }
+
+  async function loadEntities(profileId: string | undefined, namespace: string, refresh = false) {
+    if (!profileId || !namespace || namespace === "*") {
+      setEntityOptions([]);
+      return;
+    }
+    setDiscoveryLoading(true);
+    setDiscoveryError(null);
+    try {
+      const discovered = await api.discoverEntities({ profile_id: profileId, namespace, refresh });
+      setEntityOptions(itemsToOptions(discovered.items));
+    } catch (loadError) {
+      setDiscoveryError(loadError instanceof Error ? loadError.message : "Failed to discover entities.");
+    } finally {
+      setDiscoveryLoading(false);
+    }
+  }
+
+  async function loadFields(profileId: string | undefined, namespace: string, entity: string, refresh = false) {
+    if (!profileId || !namespace || !entity || namespace === "*" || entity === "*") {
+      setFieldOptions([]);
+      return;
+    }
+    setDiscoveryLoading(true);
+    setDiscoveryError(null);
+    try {
+      const discovered = await api.discoverFields({ profile_id: profileId, namespace, entity, refresh });
+      setFieldOptions(itemsToOptions(discovered.items));
+    } catch (loadError) {
+      setDiscoveryError(loadError instanceof Error ? loadError.message : "Failed to discover fields.");
+    } finally {
+      setDiscoveryLoading(false);
+    }
+  }
+
+  function openDialog(mode: DialogMode, profile: ProfileSummary | null = null) {
+    const nextForm = toFormState(profile);
     setSelectedProfile(profile);
     setDialogMode(mode);
-    setForm(toFormState(profile));
+    setForm(nextForm);
+    setError(null);
+    setDiscoveryError(null);
+    setScopeResult(null);
+    setNamespaceOptions([]);
+    setEntityOptions([]);
+    setFieldOptions([]);
     setDialogOpen(true);
-  };
+    if (nextForm.source_connection) void loadNamespaces(nextForm.source_connection);
+    if (profile && nextForm.namespaces[0]) void loadEntities(profile.profile_id, nextForm.namespaces[0]);
+    if (profile && nextForm.namespaces[0] && nextForm.entities[0]) void loadFields(profile.profile_id, nextForm.namespaces[0], nextForm.entities[0]);
+  }
 
-  const closeDialog = () => {
+  function closeDialog() {
     setDialogOpen(false);
     setSelectedProfile(null);
-    setForm(toFormState(null));
-  };
+    setForm(EMPTY_FORM);
+    setScopeResult(null);
+    setDiscoveryError(null);
+  }
 
-  const submit = async () => {
+  async function submit() {
     setError(null);
+    const payload = toDraft(form);
+    if (!payload.name || !payload.source_connection || !payload.source_type) {
+      setError("Name and source connection are required.");
+      return;
+    }
     try {
-      const payload: ProfileDraft = {
-        ...EMPTY_PROFILE,
-        name: form.name.trim(),
-        source_type: form.source_type.trim() || "mongodb",
-        source_connection: form.source_connection.trim() || "default",
-        description: form.description.trim(),
-        namespaces: parseCsv(form.namespacesCsv),
-        entities: parseCsv(form.entitiesCsv),
-        enabled_tools: [...form.enabled_tools],
-        allowed_permissions: [...form.allowed_permissions],
-        field_masks: parseJsonRecord(form.fieldMasksJson),
-        field_exclusions: parseCsv(form.fieldExclusionsCsv),
-        index_policy: {
-          enabled: form.index_enabled,
-          include_content: form.index_include_content,
-          content_fields: parseCsv(form.index_content_fields_csv),
-          max_documents: form.index_max_documents.trim() ? Number(form.index_max_documents) : undefined,
-        },
-      };
       if (dialogMode === "edit" && selectedProfile) {
         await api.updateProfile(selectedProfile.profile_id, payload);
         setStatus(`Updated profile ${payload.name}.`);
@@ -223,9 +349,28 @@ export function ProfilesPage() {
     } catch (submitError) {
       setError(submitError instanceof Error ? submitError.message : "Failed to save profile.");
     }
-  };
+  }
 
-  const remove = async (profile: ProfileSummary) => {
+  async function runScopeTest() {
+    if (!selectedProfile) {
+      setScopeResult({ status: "WARN", warnings: ["Save the profile before running a scope test."] });
+      return;
+    }
+    setScopeRunning(true);
+    setError(null);
+    try {
+      setScopeResult(scopeTestToPanelResult(await api.testProfileScope(selectedProfile.profile_id, toDraft(form))));
+    } catch (testError) {
+      setScopeResult({
+        status: "FAIL",
+        errors: [testError instanceof Error ? testError.message : "Scope test failed."],
+      });
+    } finally {
+      setScopeRunning(false);
+    }
+  }
+
+  async function remove(profile: ProfileSummary) {
     setError(null);
     try {
       await api.deleteProfile(profile.profile_id);
@@ -235,9 +380,12 @@ export function ProfilesPage() {
     } catch (deleteError) {
       setError(deleteError instanceof Error ? deleteError.message : "Failed to delete profile.");
     }
-  };
+  }
 
-  const bulkActions: BulkAction[] = mayEditProfiles ? [{ label: "Delete Selected", action: "delete" }] : [];
+  const bulkActions: BulkAction[] = [
+    ...(mayEditProfiles ? [{ label: "Delete Selected", action: "delete" }] : []),
+    { label: "Export", action: "export" },
+  ];
 
   const columns: DataColumn<ProfileSummary>[] = [
     {
@@ -246,8 +394,25 @@ export function ProfilesPage() {
       cell: (item) => (
         <div className="space-y-1">
           <div className="flex items-center gap-2">
-            <span>{item.name}</span>
-            {item.profile_id === selectedProfileId ? <Badge>Active</Badge> : null}
+            <button
+              className="text-primary underline underline-offset-2 hover:no-underline"
+              onClick={() => openDialog("view", item)}
+              role="link"
+              title={`View profile ${item.name}`}
+              type="button"
+            >
+              {item.name}
+            </button>
+            {item.profile_id === selectedProfileId ? (
+              <span className="inline-flex items-center gap-1">
+                <Badge>Active</Badge>
+                <HelpTip
+                  label="Active profile"
+                  help="Active marks the profile currently selected across DB-MCP — catalogue, data browser, search, and schema use its connection and scope. Open another profile and choose View/Use to switch."
+                  data-testid="profile-active-help"
+                />
+              </span>
+            ) : null}
           </div>
           {item.description ? <p className="text-xs text-muted-foreground">{item.description}</p> : null}
         </div>
@@ -255,201 +420,369 @@ export function ProfilesPage() {
       sortable: true,
       sortValue: (item) => item.name,
     },
-    { id: "source", header: "Source", cell: (item) => item.source_type, sortable: true, sortValue: (item) => item.source_type },
-    { id: "connection", header: "Connection", cell: (item) => item.source_connection, sortable: true, sortValue: (item) => item.source_connection },
-    { id: "scope", header: "Scope", cell: (item) => `${item.namespaces.length || 0} namespaces / ${item.entities.length || 0} entities`, sortable: true, sortValue: (item) => item.namespaces.length + item.entities.length },
-    { id: "tools", header: "Tools", cell: (item) => item.enabled_tools.join(", ") || "-", sortable: true, sortValue: (item) => item.enabled_tools.join(", ") },
-    { id: "permissions", header: "Permissions", cell: (item) => item.allowed_permissions.slice(0, 4).join(", ") || "-", sortable: true, sortValue: (item) => item.allowed_permissions.join(", ") },
+    { id: "source_connection", header: "Source connection", cell: (item) => item.source_connection, sortable: true, sortValue: (item) => item.source_connection },
+    { id: "source_type", header: "Source type", cell: (item) => item.source_type, sortable: true, sortValue: (item) => item.source_type },
+    { id: "namespaces", header: "Namespaces", cell: (item) => item.namespaces.join(", ") || "*", sortable: true, sortValue: (item) => item.namespaces.join(", ") },
+    { id: "entities", header: "Entities", cell: (item) => item.entities.join(", ") || "*", sortable: true, sortValue: (item) => item.entities.join(", ") },
     {
-      id: "actions",
-      header: "Actions",
+      id: "tools",
+      header: "Tools enabled",
       cell: (item) => (
-        <div className="flex flex-wrap gap-2">
-          <Button size="sm" variant="secondary" onClick={() => openDialog("view", item)}>View</Button>
-          {mayEditProfiles ? <Button size="sm" variant="secondary" onClick={() => openDialog("edit", item)}>Edit</Button> : null}
-          <Button size="sm" variant={selectedProfileId === item.profile_id ? "default" : "secondary"} onClick={() => setSelectedProfileId(selectedProfileId === item.profile_id ? "" : item.profile_id)}>{selectedProfileId === item.profile_id ? "Active" : "Activate"}</Button>
-          {mayEditProfiles ? <Button size="sm" variant="destructive" onClick={() => setConfirmDelete(item)}>Delete</Button> : null}
-        </div>
+        <Badge title={item.enabled_tools.join(", ") || "No tools enabled"}>
+          {item.enabled_tools.length} / {TOOL_OPTIONS.length}
+        </Badge>
       ),
+      sortable: true,
+      sortValue: (item) => item.enabled_tools.length,
     },
+    createDataTableActionColumn<ProfileSummary>((item) => [
+      { id: "view", label: "View", onClick: () => openDialog("view", item) },
+      ...(mayEditProfiles ? [{ id: "edit", label: "Edit", onClick: () => openDialog("edit", item) }] : []),
+      { id: "catalogue", label: "Catalogue", href: () => `/catalogue/${encodeURIComponent(item.profile_id)}` },
+      { id: "schema", label: "Schema", href: () => `/schema?profile=${encodeURIComponent(item.profile_id)}` },
+      { id: "audit", label: "Audit & Log", href: () => `/audit-log?profile_id=${encodeURIComponent(item.profile_id)}` },
+      ...(mayEditProfiles ? [{ id: "delete", label: "Delete", destructive: true, onClick: () => setConfirmDelete(item) }] : []),
+    ]),
   ];
 
   return (
     <div className="space-y-6">
-      <header className="flex flex-wrap items-center gap-3">
+      <header className="flex flex-wrap items-center justify-between gap-3">
         <h1 className="text-2xl font-semibold">Profiles</h1>
-        {mayEditProfiles ? <Button onClick={() => openDialog("add")}>Add Connection</Button> : null}
-        <Button variant="secondary" size="sm" onClick={() => void refreshProfiles()}>Refresh</Button>
+        <div className="flex flex-wrap items-center gap-2">
+          <Button
+            onClick={() => {
+              void refreshProfiles();
+              void loadSourceConnections();
+            }}
+            size="sm"
+            type="button"
+            variant="secondary"
+          >
+            Refresh
+          </Button>
+          {mayEditProfiles ? <Button onClick={() => openDialog("add")} type="button">Add Profile</Button> : null}
+        </div>
       </header>
-      {!mayEditProfiles ? (
-        <p className="text-sm text-muted-foreground">
-          Profile editing is restricted to users with the <span className="font-medium">admin</span> or <span className="font-medium">data_steward</span> role.
-        </p>
-      ) : null}
-      {error ? <p role="alert" className="text-sm text-destructive">{error}</p> : null}
-      {status ? <p role="status" className="text-sm text-foreground/80">{status}</p> : null}
+      {error ? <p className="text-sm text-destructive" role="alert">{error}</p> : null}
+      {status ? <p className="text-sm text-foreground/80" role="status">{status}</p> : null}
       <DataTable
-        columns={columns}
-        rows={profiles}
-        emptyMessage="No profiles configured."
-        page={page}
-        pageSize={10}
-        onPageChange={setPage}
-        selectable={mayEditProfiles}
+        ariaLabel="Profiles"
         bulkActions={bulkActions}
+        columnPickerEnabled
+        columns={columns}
+        emptyMessage="No profiles configured."
+        getRowId={(item) => item.profile_id}
         onBulkAction={(action, selectedIds) => {
+          const selectedRows = profiles.filter((item) => selectedIds.includes(item.profile_id));
+          if (action === "export") {
+            exportRowsJson(selectedRows, "db-mcp-profiles.json");
+            return;
+          }
           if (!mayEditProfiles || action !== "delete") return;
-          void Promise.all(
-            profiles
-              .filter((item) => selectedIds.includes(item.profile_id))
-              .map((item) => api.deleteProfile(item.profile_id))
-          ).then(async () => {
+          void Promise.all(selectedRows.map((item) => api.deleteProfile(item.profile_id))).then(async () => {
             await refreshProfiles();
             setStatus(`Deleted ${selectedIds.length} profiles.`);
           });
         }}
-        columnPickerEnabled
+        onPageChange={setPage}
+        page={page}
+        pageSize={10}
+        rows={profiles}
+        selectable
         tableId="db-mcp-profiles"
-        getRowId={(item) => item.profile_id}
       />
-      <EntityDialog
+      <ProfileDialog
+        connectionOptions={effectiveConnectionOptions}
+        discoveryError={discoveryError}
+        discoveryLoading={discoveryLoading}
+        entityOptions={entityOptions}
+        fieldOptions={fieldOptions}
+        form={form}
+        mode={dialogMode}
+        namespaceOptions={namespaceOptions}
         open={dialogOpen}
-        onOpenChange={setDialogOpen}
-        title={dialogMode === "add" ? "Add connection" : dialogMode === "edit" ? "Edit connection" : "View connection"}
-        fields={PROFILE_FIELDS}
-        values={form as unknown as Record<string, unknown>}
-        onChange={(name, value) => setForm((current) => ({ ...current, [name]: String(value ?? "") }))}
-        onSubmit={() => {
-          if (!dialogReadOnly) {
-            void submit();
-            return;
-          }
-          closeDialog();
-        }}
+        readOnly={dialogReadOnly}
+        scopeResult={scopeResult}
+        scopeRunning={scopeRunning}
+        selectedProfile={selectedProfile}
+        setForm={setForm}
         onCancel={closeDialog}
-        mode={dialogReadOnly ? "view" : dialogMode}
-        extra={(
-          <div className="space-y-4 border-t pt-4">
-            <div className="space-y-2">
-              <Label>Enabled tool families <span className="text-xs font-normal text-muted-foreground">(select which MCP tool families this profile exposes)</span></Label>
-              <div className="grid gap-2 md:grid-cols-2">
-                {TOOL_OPTIONS.map((tool) => (
-                  <label key={tool} className="flex items-center gap-2 text-sm">
-                    <Checkbox
-                      checked={form.enabled_tools.includes(tool)}
-                      disabled={dialogReadOnly}
-                      onChange={(event) =>
-                        setForm((current) => ({
-                          ...current,
-                          enabled_tools: toggleListValue(current.enabled_tools, tool, event.currentTarget.checked),
-                        }))
-                      }
-                    />
-                    <span>{tool}</span>
-                  </label>
-                ))}
-              </div>
-            </div>
-            <div className="space-y-2">
-              <Label>Allowed permissions <span className="text-xs font-normal text-muted-foreground">(fine-grained access this profile grants)</span></Label>
-              <div className="grid gap-2 md:grid-cols-2">
-                {PERMISSION_OPTIONS.map((permission) => (
-                  <label key={permission} className="flex items-center gap-2 text-sm">
-                    <Checkbox
-                      checked={form.allowed_permissions.includes(permission)}
-                      disabled={dialogReadOnly}
-                      onChange={(event) =>
-                        setForm((current) => ({
-                          ...current,
-                          allowed_permissions: toggleListValue(current.allowed_permissions, permission, event.currentTarget.checked),
-                        }))
-                      }
-                    />
-                    <span>{permission}</span>
-                  </label>
-                ))}
-              </div>
-            </div>
-            <div className="grid gap-4 md:grid-cols-2">
-              <div className="space-y-2">
-                <Label htmlFor="profile-field-masks">Field masks (JSON) <span className="text-xs font-normal text-muted-foreground">e.g. {`{"ssn": "****"}`}</span></Label>
-                <Textarea
-                  id="profile-field-masks"
-                  rows={6}
-                  value={form.fieldMasksJson}
-                  disabled={dialogReadOnly}
-                  onChange={(event) => setForm((current) => ({ ...current, fieldMasksJson: event.target.value }))}
-                />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="profile-field-exclusions">Field exclusions (comma-separated) <span className="text-xs font-normal text-muted-foreground">e.g. ssn, credit_card</span></Label>
-                <Textarea
-                  id="profile-field-exclusions"
-                  rows={6}
-                  value={form.fieldExclusionsCsv}
-                  disabled={dialogReadOnly}
-                  onChange={(event) => setForm((current) => ({ ...current, fieldExclusionsCsv: event.target.value }))}
-                />
-              </div>
-            </div>
-            <div className="space-y-2">
-              <Label>Index policy <span className="text-xs font-normal text-muted-foreground">(controls discovery search indexing)</span></Label>
-              <div className="grid gap-4 md:grid-cols-2">
-                <label className="flex items-center gap-2 text-sm">
-                  <Checkbox
-                    checked={form.index_enabled}
-                    disabled={dialogReadOnly}
-                    onChange={(event) => setForm((current) => ({ ...current, index_enabled: event.currentTarget.checked }))}
-                  />
-                  <span>Indexing enabled</span>
-                </label>
-                <label className="flex items-center gap-2 text-sm">
-                  <Checkbox
-                    checked={form.index_include_content}
-                    disabled={dialogReadOnly}
-                    onChange={(event) => setForm((current) => ({ ...current, index_include_content: event.currentTarget.checked }))}
-                  />
-                  <span>Include content in discovery index</span>
-                </label>
-              </div>
-              <div className="grid gap-4 md:grid-cols-2">
-                <div className="space-y-2">
-                  <Label htmlFor="profile-content-fields">Indexed content fields (comma-separated, e.g. name, email, description)</Label>
-                  <Textarea
-                    id="profile-content-fields"
-                    rows={4}
-                    value={form.index_content_fields_csv}
-                    disabled={dialogReadOnly}
-                    onChange={(event) => setForm((current) => ({ ...current, index_content_fields_csv: event.target.value }))}
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="profile-max-documents">Index max documents (number, e.g. 10000)</Label>
-                  <Textarea
-                    id="profile-max-documents"
-                    rows={2}
-                    value={form.index_max_documents}
-                    disabled={dialogReadOnly}
-                    onChange={(event) => setForm((current) => ({ ...current, index_max_documents: event.target.value }))}
-                  />
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
+        onConnectionChange={(connection) => {
+          setForm((current) => ({
+            ...current,
+            source_connection: connection?.name ?? "",
+            source_type: connection?.sourceType ?? "",
+            namespaces: [],
+            entities: [],
+            field_exclusions: [],
+            field_masks: {},
+            index_content_fields: [],
+          }));
+          setEntityOptions([]);
+          setFieldOptions([]);
+          if (connection) void loadNamespaces(connection.name, true);
+        }}
+        onEntitiesChange={(values) => {
+          setForm((current) => ({ ...current, entities: values }));
+          if (selectedProfile && form.namespaces[0] && values[0]) void loadFields(selectedProfile.profile_id, form.namespaces[0], values[0]);
+        }}
+        onNamespaceRefresh={() => void loadNamespaces(form.source_connection, true)}
+        onNamespacesChange={(values) => {
+          setForm((current) => ({ ...current, namespaces: values, entities: [] }));
+          setFieldOptions([]);
+          if (selectedProfile && values[0]) void loadEntities(selectedProfile.profile_id, values[0], true);
+        }}
+        onOpenChange={(open) => { if (!open) closeDialog(); }}
+        onRefreshEntities={() => void loadEntities(selectedProfile?.profile_id, form.namespaces[0], true)}
+        onRefreshFields={() => void loadFields(selectedProfile?.profile_id, form.namespaces[0], form.entities[0], true)}
+        onRunScopeTest={() => void runScopeTest()}
+        onSubmit={() => void submit()}
       />
       <ConfirmDialog
-        open={!!confirmDelete}
-        onOpenChange={(open) => { if (!open) setConfirmDelete(null); }}
-        title="Delete profile"
-        description={`Are you sure you want to delete profile "${confirmDelete?.name ?? ""}"? This action cannot be undone.`}
         confirmLabel="Delete"
         confirmVariant="destructive"
+        description={`Delete profile "${confirmDelete?.name ?? ""}"?`}
+        open={Boolean(confirmDelete)}
+        targetName={confirmDelete?.name}
+        title="Delete Profile"
         onConfirm={() => {
           if (confirmDelete) void remove(confirmDelete);
           setConfirmDelete(null);
         }}
+        onOpenChange={(open) => { if (!open) setConfirmDelete(null); }}
       />
     </div>
+  );
+}
+
+function ProfileDialog({
+  connectionOptions,
+  discoveryError,
+  discoveryLoading,
+  entityOptions,
+  fieldOptions,
+  form,
+  mode,
+  namespaceOptions,
+  open,
+  readOnly,
+  scopeResult,
+  scopeRunning,
+  selectedProfile,
+  setForm,
+  onCancel,
+  onConnectionChange,
+  onEntitiesChange,
+  onNamespaceRefresh,
+  onNamespacesChange,
+  onOpenChange,
+  onRefreshEntities,
+  onRefreshFields,
+  onRunScopeTest,
+  onSubmit,
+}: {
+  connectionOptions: readonly ConnectionPickerOption[];
+  discoveryError: string | null;
+  discoveryLoading: boolean;
+  entityOptions: readonly DiscoveredOption[];
+  fieldOptions: readonly DiscoveredOption[];
+  form: ProfileFormState;
+  mode: DialogMode;
+  namespaceOptions: readonly DiscoveredOption[];
+  open: boolean;
+  readOnly: boolean;
+  scopeResult: ScopeTestResult | null;
+  scopeRunning: boolean;
+  selectedProfile: ProfileSummary | null;
+  setForm: React.Dispatch<React.SetStateAction<ProfileFormState>>;
+  onCancel: () => void;
+  onConnectionChange: (connection: ConnectionPickerOption | null) => void;
+  onEntitiesChange: (values: string[]) => void;
+  onNamespaceRefresh: () => void;
+  onNamespacesChange: (values: string[]) => void;
+  onOpenChange: (open: boolean) => void;
+  onRefreshEntities: () => void;
+  onRefreshFields: () => void;
+  onRunScopeTest: () => void;
+  onSubmit: () => void;
+}) {
+  const title = mode === "add" ? "Add Profile" : mode === "edit" ? "Edit Profile" : "View Profile";
+  return (
+    <Dialog label={title} open={open} onOpenChange={onOpenChange}>
+      <form
+        className="space-y-5"
+        onSubmit={(event) => {
+          event.preventDefault();
+          if (readOnly) {
+            onCancel();
+            return;
+          }
+          onSubmit();
+        }}
+      >
+        <h2 className="text-lg font-semibold">{title}</h2>
+        <div className="grid gap-4 md:grid-cols-2">
+          <div className="space-y-1">
+            <Label htmlFor="profile-name">Name</Label>
+            <Input
+              disabled={readOnly}
+              id="profile-name"
+              value={form.name}
+              onChange={(event) => setForm((current) => ({ ...current, name: event.target.value }))}
+            />
+          </div>
+          <ConnectionPicker
+            disabled={readOnly}
+            id="profile-source-connection"
+            label="Source connection"
+            loading={discoveryLoading && connectionOptions.length === 0}
+            options={connectionOptions}
+            value={form.source_connection}
+            onChange={onConnectionChange}
+          />
+        </div>
+        <div className="grid gap-4 md:grid-cols-2">
+          <div className="space-y-1">
+            <Label htmlFor="profile-source-type">Source type</Label>
+            <Input disabled id="profile-source-type" value={form.source_type} />
+          </div>
+          <div className="space-y-1">
+            <Label htmlFor="profile-description">Description</Label>
+            <Textarea
+              disabled={readOnly}
+              id="profile-description"
+              rows={2}
+              value={form.description}
+              onChange={(event) => setForm((current) => ({ ...current, description: event.target.value }))}
+            />
+          </div>
+        </div>
+        {discoveryError ? <p className="text-sm text-destructive" role="alert">{discoveryError}</p> : null}
+        <DiscoveredMultiSelect
+          allowWildcard
+          disabled={readOnly || !form.source_connection}
+          label="Namespaces"
+          loading={discoveryLoading}
+          options={namespaceOptions}
+          values={form.namespaces}
+          onChange={onNamespacesChange}
+          onRefresh={onNamespaceRefresh}
+        />
+        <DiscoveredMultiSelect
+          allowWildcard
+          disabled={readOnly || form.namespaces.length === 0}
+          label="Entities"
+          loading={discoveryLoading}
+          options={entityOptions}
+          values={form.entities}
+          onChange={onEntitiesChange}
+          onRefresh={onRefreshEntities}
+        />
+        <div className="space-y-4 border-t pt-4">
+          <FieldMaskEditor disabled={readOnly} options={fieldOptions} value={form.field_masks} onChange={(field_masks) => setForm((current) => ({ ...current, field_masks }))} />
+          <DiscoveredMultiSelect
+            disabled={readOnly}
+            label="Field exclusions"
+            loading={discoveryLoading}
+            options={fieldOptions}
+            values={form.field_exclusions}
+            onChange={(field_exclusions) => setForm((current) => ({ ...current, field_exclusions }))}
+            onRefresh={onRefreshFields}
+          />
+        </div>
+        <div className="space-y-3 border-t pt-4">
+          <div className="flex items-center gap-1">
+            <Label>Enabled tools</Label>
+            <HelpTip label="Enabled tools" help="MCP tools this profile may invoke. Unchecked tools are blocked for principals scoped to this profile, regardless of their global role." />
+          </div>
+          <div className="grid gap-2 md:grid-cols-2">
+            {TOOL_OPTIONS.map((tool) => (
+              <label className="flex items-center gap-2 text-sm" key={tool}>
+                <Checkbox
+                  checked={form.enabled_tools.includes(tool)}
+                  disabled={readOnly}
+                  onChange={(event) => setForm((current) => ({ ...current, enabled_tools: toggleListValue(current.enabled_tools, tool, event.currentTarget.checked) }))}
+                />
+                <span>{tool}</span>
+              </label>
+            ))}
+          </div>
+        </div>
+        <div className="space-y-3 border-t pt-4">
+          <div className="flex items-center gap-1">
+            <Label>Allowed permissions</Label>
+            <HelpTip label="Allowed permissions" help="Read/write/admin actions permitted through this profile. Destructive verbs (drop, truncate, delete-without-filter) always require execute mode plus an approval token in addition to the permission." />
+          </div>
+          <div className="grid gap-2 md:grid-cols-2">
+            {PERMISSION_OPTIONS.map((permission) => (
+              <label className="flex items-center gap-2 text-sm" key={permission}>
+                <Checkbox
+                  checked={form.allowed_permissions.includes(permission)}
+                  disabled={readOnly}
+                  onChange={(event) => setForm((current) => ({ ...current, allowed_permissions: toggleListValue(current.allowed_permissions, permission, event.currentTarget.checked) }))}
+                />
+                <span>{permission}</span>
+              </label>
+            ))}
+          </div>
+        </div>
+        <div className="space-y-3 border-t pt-4">
+          <div className="flex items-center gap-1">
+            <Label>Index policy</Label>
+            <HelpTip label="Index policy" help="Controls the discovery index for this profile: whether entities/fields are indexed, whether document content is included, which content fields are indexed, and the maximum documents scanned per rebuild." />
+          </div>
+          <div className="grid gap-3 md:grid-cols-2">
+            <label className="flex items-center gap-2 text-sm">
+              <Checkbox
+                checked={form.index_enabled}
+                disabled={readOnly}
+                onChange={(event) => setForm((current) => ({ ...current, index_enabled: event.currentTarget.checked }))}
+              />
+              <span>Indexing enabled</span>
+            </label>
+            <label className="flex items-center gap-2 text-sm">
+              <Checkbox
+                checked={form.index_include_content}
+                disabled={readOnly}
+                onChange={(event) => setForm((current) => ({ ...current, index_include_content: event.currentTarget.checked }))}
+              />
+              <span>Include content</span>
+            </label>
+          </div>
+          <DiscoveredMultiSelect
+            disabled={readOnly}
+            label="Content fields"
+            loading={discoveryLoading}
+            options={fieldOptions}
+            values={form.index_content_fields}
+            onChange={(index_content_fields) => setForm((current) => ({ ...current, index_content_fields }))}
+            onRefresh={onRefreshFields}
+          />
+          <div className="space-y-1">
+            <Label htmlFor="profile-max-documents">Max documents</Label>
+            <Input
+              disabled={readOnly}
+              id="profile-max-documents"
+              inputMode="numeric"
+              value={form.index_max_documents}
+              onChange={(event) => setForm((current) => ({ ...current, index_max_documents: event.target.value }))}
+            />
+          </div>
+        </div>
+        <ScopeTestPanel result={scopeResult} running={scopeRunning} onRun={onRunScopeTest} />
+        <div className="flex flex-wrap justify-end gap-2 pt-2">
+          {selectedProfile ? (
+            <Button asChild type="button" variant="secondary">
+              <a href={`/catalogue/${encodeURIComponent(selectedProfile.profile_id)}`}>View in Catalogue</a>
+            </Button>
+          ) : null}
+          <Button type="button" variant="secondary" onClick={onCancel}>
+            {readOnly ? "Close" : "Cancel"}
+          </Button>
+          {!readOnly ? <Button type="submit">{mode === "add" ? "Create" : "Save"}</Button> : null}
+        </div>
+      </form>
+    </Dialog>
   );
 }

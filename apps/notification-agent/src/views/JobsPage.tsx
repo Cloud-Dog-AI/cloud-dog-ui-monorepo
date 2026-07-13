@@ -16,6 +16,7 @@
 // Covers: FR1.32
 
 import * as React from 'react';
+import { Link } from 'react-router-dom';
 import { useAuth } from '@cloud-dog/auth';
 import {
   Badge,
@@ -27,16 +28,17 @@ import {
   MetricCard,
   RelativeTime,
   Select,
+  formatSeconds,
   type BulkAction,
   type DataColumn,
 } from '@cloud-dog/ui';
 import { useNotificationAgentState } from '../state/AppState';
-import type { ChannelRecord, JobQueueStatus, JobRecord } from '../lib/api';
+import type { JobQueueStatus, JobRecord } from '../lib/api';
 
 const STATUS_CANCELLABLE = new Set([
   'created', 'validated', 'queued', 'scheduled', 'dispatched', 'running', 'blocked', 'paused', 'retry_wait',
 ]);
-const STATUS_RETRYABLE = new Set(['failed', 'timeout', 'timed_out', 'dead_lettered']);
+const STATUS_RETRYABLE = new Set(['failed', 'cancelled', 'timeout', 'timed_out', 'dead_lettered']);
 const STATUS_DELETABLE = new Set(['succeeded', 'completed', 'failed', 'cancelled', 'timeout', 'timed_out', 'dead_lettered', 'ttl_expired']);
 const TERMINAL_STATUSES = new Set(['succeeded', 'completed', 'failed', 'cancelled', 'timeout', 'timed_out', 'dead_lettered', 'ttl_expired', 'archived']);
 const DETAIL_TABS = ['Overview', 'Parameters', 'Input ref', 'Result/Output', 'Thinking', 'Lifecycle log', 'Raw'] as const;
@@ -56,11 +58,8 @@ function formatDuration(job: JobRecord): string {
   const ended = job.finished_at ? Date.parse(job.finished_at) : job.updated_at ? Date.parse(job.updated_at) : NaN;
   if (Number.isNaN(started)) return 'Not started';
   if (Number.isNaN(ended) || ended < started) return 'In progress';
-  const totalSeconds = Math.round((ended - started) / 1000);
-  if (totalSeconds < 60) return `${totalSeconds}s`;
-  const minutes = Math.floor(totalSeconds / 60);
-  const seconds = totalSeconds % 60;
-  return seconds > 0 ? `${minutes}m ${seconds}s` : `${minutes}m`;
+  // CX-170: shared formatSeconds helper, no bespoke duration concatenation.
+  return formatSeconds(Math.round((ended - started) / 1000));
 }
 
 function formatStarted(job: JobRecord): React.ReactNode {
@@ -134,24 +133,6 @@ function actorLabel(job: JobRecord): string {
   return '—';
 }
 
-function jobChannelId(job: JobRecord): string {
-  const payload = job.payload ?? {};
-  return String(job.channel_id ?? payload.channel_id ?? '').trim();
-}
-
-function jobChannelLabel(job: JobRecord, channelsById: Map<string, string>): string {
-  const explicit = String(job.channel_name ?? '').trim();
-  if (explicit) return explicit;
-  const channelId = jobChannelId(job);
-  if (!channelId) return '—';
-  return channelsById.get(channelId) ?? `ID ${channelId}`;
-}
-
-function jobMessageId(job: JobRecord): string {
-  const payload = job.payload ?? {};
-  return String(job.message_id ?? payload.message_id ?? '').trim();
-}
-
 function jobActorIdentifiers(job: JobRecord): string[] {
   return [job.request_auth_identity, job.user_id, actorLabel(job)]
     .map((value) => String(value ?? '').trim().toLowerCase())
@@ -180,7 +161,6 @@ export function JobsPage() {
 
   const [jobs, setJobs] = React.useState<JobRecord[]>([]);
   const [queueStatus, setQueueStatus] = React.useState<JobQueueStatus>({});
-  const [channelsById, setChannelsById] = React.useState<Map<string, string>>(new Map());
   const [status, setStatus] = React.useState('Loading jobs…');
   const [query, setQuery] = React.useState('');
   const [statusFilter, setStatusFilter] = React.useState<string[]>([]);
@@ -229,14 +209,9 @@ export function JobsPage() {
     }
     setStatus('Refreshing jobs…');
     try {
-      const [items, queue, channels] = await Promise.all([
-        api.listJobs(250),
-        api.getJobQueueStatus(),
-        api.listChannels(),
-      ]);
+      const [items, queue] = await Promise.all([api.listJobs(250), api.getJobQueueStatus()]);
       setJobs(items);
       setQueueStatus(queue);
-      setChannelsById(new Map((channels as ChannelRecord[]).map((channel) => [String(channel.id), channel.name])));
       setStatus(`Loaded ${items.length} jobs.`);
     } catch (error) {
       setStatus('');
@@ -409,15 +384,16 @@ export function JobsPage() {
       sortValue: (job) => job.job_id,
       cell: (job) => (
         <div className="flex items-center gap-2">
-          <Button
-            type="button"
-            variant="link"
-            className="max-w-[11rem] truncate font-mono text-xs text-sky-700 hover:underline"
+          {/* CX-103: first identifier column exposes role="link" via react-router-dom Link. */}
+          <Link
+            to={`/jobs?jobId=${encodeURIComponent(job.job_id)}`}
+            className="max-w-[11rem] truncate font-mono text-xs text-primary underline-offset-4 hover:underline"
             title={job.job_id}
-            onClick={() => { void loadDetail(job); }}
+            aria-label={`View job ${job.job_id}`}
+            onClick={(e) => { e.preventDefault(); void loadDetail(job); }}
           >
             {job.job_id}
-          </Button>
+          </Link>
           <Button
             type="button"
             size="sm"
@@ -531,33 +507,6 @@ export function JobsPage() {
       cell: (job) => `${Number(job.attempt ?? 0) || 0}`,
     },
     {
-      id: 'channel',
-      header: 'Channel',
-      sortable: true,
-      sortValue: (job) => jobChannelLabel(job, channelsById),
-      cell: (job) => truncate(jobChannelLabel(job, channelsById), 44),
-    },
-    {
-      id: 'message',
-      header: 'Message',
-      sortable: true,
-      sortValue: (job) => Number(jobMessageId(job)) || 0,
-      cell: (job) => {
-        const messageId = jobMessageId(job);
-        if (!messageId) return '—';
-        return (
-          <Button
-            type="button"
-            variant="link"
-            className="p-0 text-xs text-sky-700 hover:underline"
-            onClick={() => { void loadDetail(job, 'Input ref'); }}
-          >
-            #{messageId}
-          </Button>
-        );
-      },
-    },
-    {
       id: 'actions',
       header: '',
       cell: (job) => {
@@ -569,6 +518,12 @@ export function JobsPage() {
             <Button type="button" size="sm" variant="ghost" onClick={() => { void loadDetail(job); }}>
               Detail
             </Button>
+            {/* CX-104: per-row Log action links to /diagnostics-audit?actor=<job_id>. */}
+            <Link to={`/diagnostics-audit?actor=${encodeURIComponent(job.job_id)}`}>
+              <Button type="button" size="sm" variant="ghost">
+                Log
+              </Button>
+            </Link>
             <Button
               type="button"
               size="sm"
@@ -605,7 +560,7 @@ export function JobsPage() {
         );
       },
     },
-  ], [canWriteJobs, channelsById, isAdmin, loadDetail, requestAction]);
+  ], [canWriteJobs, isAdmin, loadDetail, requestAction]);
 
   const detailBody = activeJob ? (
     <div className="space-y-4">
@@ -669,46 +624,43 @@ export function JobsPage() {
         </div>
       </div>
 
+      <div className="space-y-1 rounded-lg border p-4 text-sm" data-testid="job-result-summary">
+        <h2 className="mb-2 font-semibold">Result summary</h2>
+        <p><span className="font-medium">Channel:</span> {activeJob.channel_name ?? 'N/A'}</p>
+        <p><span className="font-medium">Destination:</span> {activeJob.destination ?? 'N/A'}</p>
+        {activeJob.message_id ? (
+          <p>
+            <span className="font-medium">Message:</span>{' '}
+            <Link className="text-sky-700 underline" to={`/messages?highlight=${activeJob.message_id}`}>
+              #{activeJob.message_id}
+            </Link>
+          </p>
+        ) : null}
+        <p><span className="font-medium">Outcome:</span> {outcomeSummary(activeJob) || String(activeJob.status ?? 'N/A')}</p>
+      </div>
+
       {activeDetailTab === 'Overview' ? (
-        <div role="tabpanel" className="space-y-4">
-          <div className="grid gap-3 sm:grid-cols-2">
-            {([
-              ['Job ID', activeJob.job_id],
-              ['Type', activeJob.job_type],
-              ['Status', statusLabel(activeJob.status)],
-              ['Actor', actorLabel(activeJob)],
-              ['Created', activeJob.created_at ?? '—'],
-              ['Started', activeJob.started_at ?? '—'],
-              ['Updated', activeJob.updated_at ?? '—'],
-              ['Completed', activeJob.finished_at ?? '—'],
-              ['Duration', formatDuration(activeJob)],
-              ['Retry count', String(Number(activeJob.attempt ?? 0) || 0)],
-              ['Last error', outcomeSummary(activeJob) || '—'],
-              ['Correlation ID', activeJob.correlation_id ?? '—'],
-              ['Request Source', activeJob.request_source ?? '—'],
-              ['Auth Method', activeJob.request_auth_method ?? '—'],
-              ['Trace ID', (activeJob.payload as Record<string, unknown>)?.trace_id ?? '—'],
-            ] as Array<[string, unknown]>).map(([label, value]) => (
-              <div key={label} className={label === 'Last error' ? 'sm:col-span-2' : undefined}>
-                <dt className="text-xs font-medium uppercase text-muted-foreground">{label}</dt>
-                <dd className="mt-1 break-words text-sm">{String(value ?? '—')}</dd>
-              </div>
-            ))}
-          </div>
-          <div className="rounded-md border bg-muted/20 p-3">
-            <h3 className="text-sm font-semibold">Progress</h3>
-            <p className="mt-1 text-sm text-muted-foreground">
-              {statusLabel(activeJob.status)} after {Number(activeJob.attempt ?? 0) || 0} retry attempt(s).
-            </p>
-          </div>
-          <div data-testid="job-result-summary" className="rounded-md border bg-muted/20 p-3 text-sm">
-            <p>Channel: {jobChannelLabel(activeJob, channelsById)}</p>
-            <p>Destination: {String(activeJob.destination ?? activeJob.payload?.destination ?? '—')}</p>
-            <p>Message: {jobMessageId(activeJob) ? `#${jobMessageId(activeJob)}` : '—'}</p>
-          </div>
-          <Button type="button" variant="secondary" onClick={() => setActiveDetailTab('Raw')}>
-            Raw payload
-          </Button>
+        <div role="tabpanel" className="grid gap-3 sm:grid-cols-2">
+          {([
+            ['Job ID', activeJob.job_id],
+            ['Type', activeJob.job_type],
+            ['Status', statusLabel(activeJob.status)],
+            ['Actor', actorLabel(activeJob)],
+            ['Created', activeJob.created_at ?? '—'],
+            ['Started', activeJob.started_at ?? '—'],
+            ['Updated', activeJob.updated_at ?? '—'],
+            ['Completed', activeJob.finished_at ?? '—'],
+            ['Duration', formatDuration(activeJob)],
+            ['Retry count', String(Number(activeJob.attempt ?? 0) || 0)],
+            ['Last error', outcomeSummary(activeJob) || '—'],
+            ['Correlation ID', activeJob.correlation_id ?? '—'],
+            ['Trace ID', (activeJob.payload as Record<string, unknown>)?.trace_id ?? '—'],
+          ] as Array<[string, unknown]>).map(([label, value]) => (
+            <div key={label} className={label === 'Last error' ? 'sm:col-span-2' : undefined}>
+              <dt className="text-xs font-medium uppercase text-muted-foreground">{label}</dt>
+              <dd className="mt-1 break-words text-sm">{String(value ?? '—')}</dd>
+            </div>
+          ))}
         </div>
       ) : null}
 

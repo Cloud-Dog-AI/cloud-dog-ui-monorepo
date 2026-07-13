@@ -154,7 +154,7 @@ export function TagManagerPage() {
         onOpenWorkspace={openWorkspace}
         status={status}
         error={error}
-        title="Tag workspace context"
+        title="Tag Workspace Context"
         actions={
           <>
             <Button variant="secondary" onClick={() => void refresh(true)} disabled={!session.workspaceId}>Refresh tags</Button>

@@ -16,17 +16,9 @@ import * as React from "react";
 import { useNavigate } from "react-router-dom";
 import { CopyrightFooter, DashboardLayout, VersionInfo } from "@cloud-dog/shell";
 import { useConfig } from "@cloud-dog/config";
-import { Button, DataTable, HealthWidget, MetricCard, QuickActionBar, RelativeTime, type DataColumn } from "@cloud-dog/ui";
+import { Button, DataTable, MetricCard, QuickActionBar, RelativeTime, Spinner, type DataColumn } from "@cloud-dog/ui";
 import { useIndexRetrieverState } from "../state/AppState";
-import type { AuditLogEntry, HealthResponse, StatusResponse } from "../lib/types";
-
-function healthStatus(value: string | undefined): "ok" | "warning" | "error" | "unknown" {
-  const status = (value ?? "").toLowerCase();
-  if (status === "ok") return "ok";
-  if (status === "warning") return "warning";
-  if (status === "error") return "error";
-  return "unknown";
-}
+import type { AuditLogEntry, StatusResponse } from "../lib/types";
 
 type RuntimeConfig = {
   APP_VERSION?: string;
@@ -63,26 +55,32 @@ export function DashboardPage() {
   const cfg = useConfig<RuntimeConfig>();
   const app = useIndexRetrieverState();
   const navigate = useNavigate();
-  const [health, setHealth] = React.useState<HealthResponse | null>(null);
+  const [isLoading, setIsLoading] = React.useState(true);
   const [status, setStatus] = React.useState<StatusResponse | null>(null);
   const [auditActivity, setAuditActivity] = React.useState<ActivityRow[]>([]);
   const [error, setError] = React.useState<string | null>(null);
 
+  // Track first load so subsequent polls do not replace the page with a spinner.
+  const initialLoadRef = React.useRef(true);
+
   const load = React.useCallback(async () => {
     setError(null);
     try {
-      const [healthResult, statusResult, auditResult] = await Promise.all([
-        app.api.getHealth(),
+      const [statusResult, auditResult] = await Promise.all([
         app.api.getStatus(),
         app.api.getAuditLog({ limit: 10, log_source: "api" }).catch(() => ({ entries: [] })),
       ]);
-      setHealth(healthResult);
       setStatus(statusResult);
       setAuditActivity((auditResult.entries ?? []).map(activityFromAudit));
     } catch (loadError) {
       const message = app.captureFailure(loadError);
       setError(message);
       app.recordActivity("dashboard.refresh", "error", message);
+    } finally {
+      if (initialLoadRef.current) {
+        initialLoadRef.current = false;
+        setIsLoading(false);
+      }
     }
   }, [app]);
 
@@ -121,6 +119,15 @@ export function DashboardPage() {
     []
   );
 
+  if (isLoading) {
+    return (
+      <div className="flex min-h-[40vh] items-center gap-2 text-sm text-muted-foreground" role="status" aria-live="polite">
+        <Spinner className="h-5 w-5" />
+        Loading dashboard...
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-6">
       <header className="flex flex-wrap items-center gap-3">
@@ -135,21 +142,6 @@ export function DashboardPage() {
       ) : null}
 
       <DashboardLayout
-        healthWidgets={
-          <>
-            <HealthWidget name="API" status={healthStatus(health?.status)} detail={status?.host ?? "runtime"} url="/health" />
-            <HealthWidget
-              name="VDB"
-              status={healthStatus(String((health?.checks?.vdb as { status?: string } | undefined)?.status))}
-              detail={String((health?.checks?.vdb as { provider?: string } | undefined)?.provider ?? "backend")}
-            />
-            <HealthWidget
-              name="Embedding"
-              status={healthStatus(String((health?.checks?.embedding as { status?: string } | undefined)?.status))}
-              detail={String((health?.checks?.embedding as { model?: string } | undefined)?.model ?? "embedding")}
-            />
-          </>
-        }
         metricCards={
           <>
             <MetricCard label="Collections" value={status?.collection_count ?? "N/A"} />

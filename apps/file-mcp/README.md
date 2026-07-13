@@ -39,7 +39,7 @@ Run `file-mcp-server` with streamable HTTP enabled and the MCP endpoint availabl
 Example used by Playwright:
 
 ```bash
-cd <your-workspace>/file-mcp-server
+cd file-mcp-server
 ./server_control.sh --env tests/env-ST serve
 ```
 

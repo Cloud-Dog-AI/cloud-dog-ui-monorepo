@@ -23,6 +23,18 @@ const mcpTarget = process.env.GIT_MCP_MCP_PROXY_TARGET ?? "http://127.0.0.1:1858
 const a2aTarget = process.env.GIT_MCP_A2A_PROXY_TARGET ?? "http://127.0.0.1:18587";
 
 const proxy = {
+  "^/api(/|$)": {
+    target: apiTarget,
+    changeOrigin: true,
+  },
+  "^/mcp(/|$)": {
+    target: mcpTarget,
+    changeOrigin: true,
+  },
+  "^/a2a(/|$)": {
+    target: a2aTarget,
+    changeOrigin: true,
+  },
   "/git-api": {
     target: apiTarget,
     changeOrigin: true,
@@ -43,6 +55,7 @@ const proxy = {
 export default defineConfig({
   plugins: [react()],
   resolve: {
+    dedupe: ["react", "react-dom", "react-router", "react-router-dom"],
     alias: {
       "@cloud-dog/api-client": fileURLToPath(new URL("../../packages/api-client/src/index.ts", import.meta.url)),
       "@cloud-dog/auth": fileURLToPath(new URL("../../packages/auth/src/index.ts", import.meta.url)),

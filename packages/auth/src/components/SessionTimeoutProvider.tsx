@@ -23,6 +23,7 @@ interface SessionTimeoutProviderProps {
   warningMinutes?: number;
   onTimeout?: () => void;
   children: React.ReactNode;
+  testIdPrefix?: string;
 }
 
 const ACTIVITY_EVENTS = ["mousemove", "keydown", "scroll", "click", "touchstart"] as const;
@@ -32,6 +33,7 @@ export function SessionTimeoutProvider({
   warningMinutes = 5,
   onTimeout,
   children,
+  testIdPrefix = "cloud-dog-session-timeout",
 }: SessionTimeoutProviderProps) {
   const auth = useAuth();
   const [showWarning, setShowWarning] = React.useState(false);
@@ -116,17 +118,24 @@ export function SessionTimeoutProvider({
     <>
       {children}
       <Dialog open={showWarning} onOpenChange={() => {}}>
-        <div className="space-y-4" role="alertdialog" aria-label="Session timeout warning">
+        <div
+          className="space-y-4"
+          role="alertdialog"
+          aria-label="Session timeout warning"
+          data-testid={`${testIdPrefix}-dialog`}
+        >
           <h2 className="text-lg font-semibold">Session expiring soon</h2>
           <p className="text-sm text-muted-foreground">
             Your session will expire in{" "}
-            <span className="font-mono font-semibold" aria-live="polite">
+            <span className="font-mono font-semibold" aria-live="polite" data-testid={`${testIdPrefix}-countdown`}>
               {countdownMM}:{countdownSS}
             </span>
             .
           </p>
           <div className="flex gap-2">
-            <Button onClick={startIdleTimer}>Stay signed in</Button>
+            <Button onClick={startIdleTimer} data-testid={`${testIdPrefix}-stay-signed-in`}>
+              Stay signed in
+            </Button>
           </div>
         </div>
       </Dialog>

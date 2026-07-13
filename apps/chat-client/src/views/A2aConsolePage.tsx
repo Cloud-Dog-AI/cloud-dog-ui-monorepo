@@ -13,14 +13,13 @@
 // limitations under the License.
 
 import * as React from "react";
-import { A2aConsole, Badge, Button, Card, CardContent, CardHeader, Input, Select } from "@cloud-dog/ui";
-import { useConfig } from "@cloud-dog/config";
+import { A2aConsole, Badge, Button, Card, CardContent, CardHeader, FileDropZone, Input, Select } from "@cloud-dog/ui";
+import { useConfig } from "../lib/runtime-config";
 import { useAppState } from "../state/AppState";
 
 type RuntimeConfig = {
   A2A_EVENTS_URL: string;
   A2A_WS_URL: string;
-  API_KEY_HEADER?: string;
 };
 
 function resolveA2aHttpBase(eventsUrl: string): string {
@@ -86,10 +85,10 @@ export function A2aConsolePage() {
   const authHeaders = React.useMemo(() => {
     const headers: Record<string, string> = {};
     if (apiKey.trim()) {
-      headers[apiKeyHeader || cfg.API_KEY_HEADER || "X-API-Key"] = apiKey.trim();
+      headers[apiKeyHeader || "X-API-Key"] = apiKey.trim();
     }
     return headers;
-  }, [apiKey, apiKeyHeader, cfg.API_KEY_HEADER]);
+  }, [apiKey, apiKeyHeader]);
 
   React.useEffect(() => {
     if (!activeSessionId || fileServerIndex === null) {
@@ -296,10 +295,16 @@ export function A2aConsolePage() {
           <div className="space-y-2 rounded-md border p-3">
             <label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Upload path</label>
             <Input value={uploadPath} onChange={(event) => setUploadPath(event.target.value)} aria-label="Upload path" />
-            <Input
-              type="file"
-              aria-label="Upload file"
-              onChange={(event) => setSelectedFile(event.target.files?.[0] ?? null)}
+            <FileDropZone
+              accept=".txt,.md,.json,.yaml,.yml,.xml,.html,.csv,.log,application/octet-stream,text/*"
+              multiple={false}
+              label="A2A upload file"
+              description={selectedFile ? `${selectedFile.name} selected for upload.` : "Choose one file to upload through the A2A file skill."}
+              dropLabel="Drop the A2A file here"
+              browseLabel="Browse file"
+              inputLabel="A2A upload file"
+              disabled={busyAction !== null}
+              onDrop={(files) => setSelectedFile(files[0] ?? null)}
             />
             <Button onClick={() => void handleUpload()} disabled={busyAction !== null || !selectedFile}>
               {busyAction === "upload" ? "Uploading..." : "Upload via A2A"}

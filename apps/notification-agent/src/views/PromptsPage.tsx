@@ -16,8 +16,10 @@
 // Covers: UI-R1, UI-R2
 
 import * as React from 'react';
-import { Badge, Button, Card, CardContent, CardHeader, DataTable, EntityDialog, Input, JsonBlock, Label, RelativeTime, Select, Textarea } from '@cloud-dog/ui';
-import type { BulkAction, DataColumn, EntityFieldDef, EntityFormMode } from '@cloud-dog/ui';
+import { Link } from 'react-router-dom';
+import { Badge, Button, Card, CardContent, CardHeader, DataTable, EntityDialog, Input, JsonBlock, Label, RelativeTime, Select, Textarea, createDataTableActionColumn } from '@cloud-dog/ui';
+import type { BulkAction, DataColumn, EntityFormMode } from '@cloud-dog/ui';
+import { FileText, MessageSquare, Pencil, Copy, Trash2 } from 'lucide-react';
 import { useNotificationAgentState } from '../state/AppState';
 import type { PromptRecord } from '../lib/api';
 
@@ -32,16 +34,6 @@ type PromptFormValues = Readonly<{
 }>;
 
 const LANGUAGE_OPTIONS = ['en', 'fr', 'de', 'es', 'ar', 'uk', 'ru', 'zh', 'ja'];
-
-const promptFields = (mode: EntityFormMode, groupOptions: string[] = []): EntityFieldDef[] => [
-  { name: 'name', label: 'Name', type: 'text', required: true, readOnly: mode === 'view' },
-  { name: 'channel_type', label: 'Channel type', type: 'select', options: ['email', 'sms', 'whatsapp', 'slack', 'teams'], readOnly: mode === 'view' },
-  { name: 'group_id', label: 'Group', type: 'select', options: [''].concat(groupOptions), readOnly: mode === 'view' },
-  { name: 'language', label: 'Language', type: 'select', options: LANGUAGE_OPTIONS, readOnly: mode === 'view' },
-  { name: 'keyword', label: 'Keyword', type: 'text', readOnly: mode === 'view' },
-  { name: 'priority', label: 'Priority', type: 'number', readOnly: mode === 'view' },
-  { name: 'enabled', label: 'Enabled', type: 'boolean', readOnly: mode === 'view' },
-];
 
 const emptyForm: PromptFormValues = {
   name: '',
@@ -198,10 +190,16 @@ export function PromptsPage() {
       header: 'Name',
       sortable: true,
       sortValue: (prompt) => prompt.name,
+      // CX-103: first identifier column opens the view/edit dialog via a Link.
       cell: (prompt) => (
-        <span className="cursor-pointer font-medium underline-offset-4 hover:underline" onClick={() => openDialog('view', prompt)}>
+        <Link
+          to={`/prompts?promptId=${encodeURIComponent(String(prompt.id))}`}
+          className="font-medium text-primary underline-offset-4 hover:underline"
+          aria-label={`View prompt ${prompt.name}`}
+          onClick={(e) => { e.preventDefault(); openDialog('view', prompt); }}
+        >
           {prompt.name}
-        </span>
+        </Link>
       ),
     },
     {
@@ -239,17 +237,44 @@ export function PromptsPage() {
       sortValue: (prompt) => prompt.updated_at ?? '',
       cell: (prompt) => prompt.updated_at ? <RelativeTime timestamp={prompt.updated_at} /> : 'N/A',
     },
-    {
-      id: 'actions',
-      header: 'Actions',
-      cell: (prompt) => (
-        <div className="flex flex-wrap gap-2">
-          <Button variant="secondary" onClick={() => openDialog('edit', prompt)}>Edit</Button>
-          <Button variant="secondary" onClick={() => void duplicatePrompt(prompt)}>Duplicate</Button>
-          <Button variant="secondary" onClick={() => void deletePrompts([prompt])}>Delete</Button>
-        </div>
-      ),
-    },
+    // CX-102 / CX-104: shared action-cell helper (Edit, Duplicate, Log, Delete).
+    createDataTableActionColumn<PromptRecord>((prompt) => [
+      {
+        id: 'edit',
+        label: 'Edit',
+        icon: <Pencil className="h-4 w-4" />,
+        onClick: () => openDialog('edit', prompt),
+      },
+      {
+        id: 'duplicate',
+        label: 'Duplicate',
+        icon: <Copy className="h-4 w-4" />,
+        onClick: () => void duplicatePrompt(prompt),
+      },
+      // NA-P-07: prompt -> Messages filtered by prompt name (Messages page
+      // text-search matches against the prompt label embedded in the row).
+      {
+        id: 'messages',
+        label: 'Messages',
+        icon: <MessageSquare className="h-4 w-4" />,
+        href: () => `/messages?prompt=${encodeURIComponent(prompt.name)}`,
+        title: () => `View messages using prompt ${prompt.name}`,
+      },
+      {
+        id: 'audit-log',
+        label: 'Audit & Log',
+        icon: <FileText className="h-4 w-4" />,
+        href: () => `/diagnostics-audit?actor=${encodeURIComponent(prompt.name)}`,
+        title: () => `View Audit & Log entries for prompt ${prompt.name}`,
+      },
+      {
+        id: 'delete',
+        label: 'Delete',
+        icon: <Trash2 className="h-4 w-4" />,
+        destructive: true,
+        onClick: () => void deletePrompts([prompt]),
+      },
+    ]),
   ], [deletePrompts, duplicatePrompt]);
 
   const bulkActions = React.useMemo<BulkAction[]>(() => [
@@ -331,6 +356,31 @@ export function PromptsPage() {
     <div className="space-y-6">
       <header className="space-y-2">
         <h1 className="text-2xl font-semibold">Prompts</h1>
+        <p className="text-xs text-muted-foreground">
+          Runtime prompt selection consumes enabled prompts by channel, language, keyword, group, and priority.
+        </p>
+        {/* NA-P-05: surface which prompts are the current per-channel default
+            (highest-priority enabled prompt for each channel_type). NA-P-08/09:
+            this is the same view the backend prompt-selection path consumes
+            (see notification-agent /webapi/proxy/prompts — sort by priority
+            desc, channel/language filter applied at send time). */}
+        {prompts.length > 0 ? (
+          <p className="text-xs text-muted-foreground">
+            Default prompts in use (highest priority per channel type):
+            {' '}
+            {Object.entries(
+              prompts
+                .filter((p) => p.enabled === true || p.enabled === 1)
+                .reduce<Record<string, PromptRecord>>((acc, p) => {
+                  const ct = (p.channel_type ?? 'any').toLowerCase();
+                  if (!acc[ct] || Number(p.priority ?? 0) > Number(acc[ct].priority ?? 0)) acc[ct] = p;
+                  return acc;
+                }, {}),
+            )
+              .map(([ct, p]) => `${ct}=${p.name} (lang ${p.language ?? 'en'}, priority ${p.priority ?? 0})`)
+              .join('; ') || 'none enabled.'}
+          </p>
+        ) : null}
       </header>
 
       {latestFailure ? <p role="alert" className="text-sm text-destructive">{latestFailure}</p> : null}
@@ -384,6 +434,11 @@ export function PromptsPage() {
         </CardContent>
       </Card>
 
+      {/* NA-P-01 / NA-P-02 / NA-P-06: Prompt view/edit/add dialog — body-mode
+          so the prompt text + variables sit INSIDE the modal (previous version
+          rendered them in a sibling Card that the modal overlay hid). For view
+          mode the prompt text is read-only; for edit/add it's editable.
+          NA-P-03: when adding, the dialog can pre-seed from the channel filter. */}
       <EntityDialog
         open={dialogOpen}
         onOpenChange={setDialogOpen}
@@ -394,57 +449,105 @@ export function PromptsPage() {
               ? `Edit prompt ${activePrompt?.name ?? ''}`
               : `View prompt ${activePrompt?.name ?? ''}`
         }
-        mode={dialogMode}
-        fields={promptFields(dialogMode, groups.map((g) => String(g.id)))}
-        values={formValues}
-        errors={formErrors}
-        onChange={(name, value) => {
-          setFormValues((current) => ({
-            ...current,
-            [name]: name === 'enabled' ? Boolean(value) : String(value ?? ''),
-          }));
-        }}
-        onSubmit={() => void savePrompt()}
-        onCancel={() => setDialogOpen(false)}
-      />
+        body={(
+          <div className="space-y-4">
+            <div className="flex items-start justify-end -mt-2">
+              <Button type="button" variant="secondary" size="sm" aria-label="Close" onClick={() => setDialogOpen(false)}>
+                Close
+              </Button>
+            </div>
 
-      {dialogOpen ? (
-        <Card>
-          <CardHeader>
-            <h2 className="text-lg font-semibold">Prompt content</h2>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="space-y-2">
-              <Label htmlFor="prompts-variables-json-adopted">Variables JSON schema</Label>
-              <Textarea
-                id="prompts-variables-json-adopted"
-                rows={6}
-                value={variablesJson}
-                onChange={(event) => setVariablesJson(event.target.value)}
-                disabled={dialogMode === 'view'}
-              />
-              {parsedVariablesState.kind === 'valid' ? (
-                <JsonBlock title="Variables JSON preview" value={parsedVariablesState.value} defaultCollapsed={false} />
-              ) : parsedVariablesState.kind === 'invalid' ? (
-                <p role="alert" className="text-sm text-destructive">{parsedVariablesState.value}</p>
-              ) : (
-                <p className="text-xs text-muted-foreground">Use a JSON object to describe the variables available to the template editor and compose workflow.</p>
-              )}
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="prompts-text-adopted">Template text</Label>
-              <Textarea
-                id="prompts-text-adopted"
-                rows={12}
-                value={promptText}
-                onChange={(event) => setPromptText(event.target.value)}
-                disabled={dialogMode === 'view'}
-              />
-            </div>
-            <p className="text-xs text-muted-foreground">Template variables use <code>{'{{variable}}'}</code> placeholders in the live backend prompt text.</p>
-          </CardContent>
-        </Card>
-      ) : null}
+            <form
+              className="space-y-4"
+              onSubmit={(event) => {
+                event.preventDefault();
+                void savePrompt();
+              }}
+            >
+              <div className="grid gap-3 md:grid-cols-2">
+                <div className="space-y-2">
+                  <Label htmlFor="prompts-form-name">Name</Label>
+                  <Input id="prompts-form-name" value={formValues.name} onChange={(event) => setFormValues((current) => ({ ...current, name: event.target.value }))} disabled={dialogMode === 'view'} />
+                  {formErrors.name ? <p className="text-sm text-destructive">{formErrors.name}</p> : null}
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="prompts-form-channel-type">Channel type</Label>
+                  <Select id="prompts-form-channel-type" value={formValues.channel_type} onChange={(event) => setFormValues((current) => ({ ...current, channel_type: event.target.value }))} disabled={dialogMode === 'view'}>
+                    {['email', 'sms', 'whatsapp', 'slack', 'teams'].map((opt) => <option key={opt} value={opt}>{opt}</option>)}
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="prompts-form-language">Language</Label>
+                  <Select id="prompts-form-language" value={formValues.language} onChange={(event) => setFormValues((current) => ({ ...current, language: event.target.value }))} disabled={dialogMode === 'view'}>
+                    {LANGUAGE_OPTIONS.map((opt) => <option key={opt} value={opt}>{opt}</option>)}
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="prompts-form-group">Group</Label>
+                  <Select id="prompts-form-group" value={formValues.group_id} onChange={(event) => setFormValues((current) => ({ ...current, group_id: event.target.value }))} disabled={dialogMode === 'view'}>
+                    <option value="">— none —</option>
+                    {groups.map((g) => <option key={g.id} value={String(g.id)}>{g.name}</option>)}
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="prompts-form-keyword">Keyword</Label>
+                  <Input id="prompts-form-keyword" value={formValues.keyword} onChange={(event) => setFormValues((current) => ({ ...current, keyword: event.target.value }))} disabled={dialogMode === 'view'} />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="prompts-form-priority">Priority</Label>
+                  <Input id="prompts-form-priority" type="number" value={formValues.priority} onChange={(event) => setFormValues((current) => ({ ...current, priority: event.target.value }))} disabled={dialogMode === 'view'} />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="prompts-form-enabled">Enabled</Label>
+                  <Select id="prompts-form-enabled" value={String(formValues.enabled)} onChange={(event) => setFormValues((current) => ({ ...current, enabled: event.target.value === 'true' }))} disabled={dialogMode === 'view'}>
+                    <option value="true">Enabled</option>
+                    <option value="false">Disabled</option>
+                  </Select>
+                </div>
+              </div>
+
+              {/* NA-P-01: Prompt body — visible in view mode (read-only), editable in edit/add. */}
+              <div className="space-y-2 border-t pt-3">
+                <Label htmlFor="prompts-text-adopted">Template text</Label>
+                <Textarea
+                  id="prompts-text-adopted"
+                  rows={12}
+                  value={promptText}
+                  onChange={(event) => setPromptText(event.target.value)}
+                  disabled={dialogMode === 'view'}
+                  placeholder="Enter the prompt template body. Use {{variable}} placeholders."
+                />
+                <p className="text-xs text-muted-foreground">Template variables use <code>{'{{variable}}'}</code> placeholders in the live backend prompt text.</p>
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="prompts-variables-json-adopted">Variables JSON schema</Label>
+                <Textarea
+                  id="prompts-variables-json-adopted"
+                  rows={6}
+                  value={variablesJson}
+                  onChange={(event) => setVariablesJson(event.target.value)}
+                  disabled={dialogMode === 'view'}
+                />
+                {parsedVariablesState.kind === 'valid' ? (
+                  <JsonBlock title="Variables JSON preview" value={parsedVariablesState.value} defaultCollapsed={false} />
+                ) : parsedVariablesState.kind === 'invalid' ? (
+                  <p role="alert" className="text-sm text-destructive">{parsedVariablesState.value}</p>
+                ) : (
+                  <p className="text-xs text-muted-foreground">Use a JSON object to describe the variables available to the template editor and compose workflow.</p>
+                )}
+              </div>
+
+              {dialogMode !== 'view' ? (
+                <div className="flex justify-end gap-2">
+                  <Button type="button" variant="secondary" onClick={() => setDialogOpen(false)}>Cancel</Button>
+                  <Button type="submit">Save changes</Button>
+                </div>
+              ) : null}
+            </form>
+          </div>
+        )}
+      />
     </div>
   );
 }

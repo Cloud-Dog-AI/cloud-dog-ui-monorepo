@@ -24,6 +24,7 @@ export type QuickAction = Readonly<{
   onClick: () => void;
   icon?: React.ReactNode;
   variant?: ButtonProps["variant"];
+  disabled?: boolean;
 }>;
 
 export type QuickActionBarProps = Readonly<{
@@ -40,6 +41,7 @@ export function QuickActionBar(props: QuickActionBarProps) {
           variant={action.variant ?? "secondary"}
           size="sm"
           onClick={action.onClick}
+          disabled={action.disabled}
         >
           {action.icon ? <span className="mr-1.5">{action.icon}</span> : null}
           {action.label}

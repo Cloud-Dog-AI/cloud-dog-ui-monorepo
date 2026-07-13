@@ -40,6 +40,7 @@ export type LoginPageProps = Readonly<{
   oidcButtonLabel?: string;
   secondaryField?: SecondaryField;
   error?: string | null;
+  testIdPrefix?: string;
 }>;
 
 export function LoginPage(props: LoginPageProps) {
@@ -94,10 +95,14 @@ export function LoginPage(props: LoginPageProps) {
   };
 
   const errorText = formError ?? props.error ?? auth.error ?? null;
+  const testIdPrefix = props.testIdPrefix ?? "cloud-dog-login";
 
   return (
-    <div className="min-h-screen bg-muted/10">
-      <header className="border-b border-border/70 bg-background/95 px-6 py-4 backdrop-blur">
+    <div className="min-h-screen bg-muted/10" data-testid={`${testIdPrefix}-page`}>
+      <header
+        className="border-b border-border/70 bg-background/95 px-6 py-4 backdrop-blur"
+        data-testid={`${testIdPrefix}-top-bar`}
+      >
         <div className="mx-auto flex w-full max-w-6xl items-center gap-3">
           <img src={brand.logoPath} alt={BRAND_NAME} className="h-8 w-8" />
           <div>
@@ -111,7 +116,7 @@ export function LoginPage(props: LoginPageProps) {
         </div>
       </header>
       <div className="grid min-h-[calc(100vh-4.5rem)] place-items-center p-4">
-        <Card className="w-full max-w-md border-border/80 shadow-sm">
+        <Card className="w-full max-w-md border-border/80 shadow-sm" data-testid={`${testIdPrefix}-card`}>
           <CardHeader className="space-y-4 text-center">
             <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl border border-border/70 bg-background shadow-sm">
               <img src={brand.logoPath} alt={BRAND_NAME} className="h-8 w-8" />
@@ -124,11 +129,17 @@ export function LoginPage(props: LoginPageProps) {
           </CardHeader>
           <CardContent>
             {mode === "cookie" ? (
-              <form onSubmit={onCookieSubmit} className="space-y-4" aria-describedby="login-errors">
+              <form
+                onSubmit={onCookieSubmit}
+                className="space-y-4"
+                aria-describedby="login-errors"
+                data-testid={`${testIdPrefix}-form`}
+              >
                 <div className="space-y-2">
                   <Label htmlFor="loginUsername">Username</Label>
                   <Input
                     id="loginUsername" name="username"
+                    data-testid={`${testIdPrefix}-username`}
                     value={username}
                     onChange={(e) => setUsername(e.target.value)}
                     autoComplete="username"
@@ -140,27 +151,44 @@ export function LoginPage(props: LoginPageProps) {
                   <Input
                     id="loginPassword" name="password"
                     type="password"
+                    data-testid={`${testIdPrefix}-password`}
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
                     autoComplete="current-password"
                     required
                   />
                 </div>
-                <div id="login-errors" aria-live="polite" className="min-h-5 text-sm text-destructive">
+                <div
+                  id="login-errors"
+                  aria-live="polite"
+                  className="min-h-5 text-sm text-destructive"
+                  data-testid={`${testIdPrefix}-error`}
+                >
                   {errorText}
                 </div>
-                <Button type="submit" loading={auth.isLoading} className="w-full">
+                <Button
+                  type="submit"
+                  loading={auth.isLoading}
+                  className="w-full"
+                  data-testid={`${testIdPrefix}-submit`}
+                >
                   Sign in
                 </Button>
               </form>
             ) : null}
 
             {mode === "api_key" ? (
-              <form onSubmit={onApiKeySubmit} className="space-y-4" aria-describedby="login-errors">
+              <form
+                onSubmit={onApiKeySubmit}
+                className="space-y-4"
+                aria-describedby="login-errors"
+                data-testid={`${testIdPrefix}-form`}
+              >
                 <div className="space-y-2">
                   <Label htmlFor="api-key">API key</Label>
                   <Input
                     id="api-key"
+                    data-testid={`${testIdPrefix}-api-key`}
                     value={apiKeyValue}
                     onChange={(e) => props.onApiKeyChange?.(e.target.value)}
                     placeholder="Enter API key"
@@ -173,6 +201,7 @@ export function LoginPage(props: LoginPageProps) {
                     <Label htmlFor={props.secondaryField.id}>{props.secondaryField.label}</Label>
                     <Input
                       id={props.secondaryField.id}
+                      data-testid={`${testIdPrefix}-secondary`}
                       value={props.secondaryField.value}
                       onChange={(e) => props.secondaryField?.onChange(e.target.value)}
                       placeholder={props.secondaryField.placeholder}
@@ -180,10 +209,21 @@ export function LoginPage(props: LoginPageProps) {
                     />
                   </div>
                 ) : null}
-                <div id="login-errors" aria-live="polite" className="min-h-5 text-sm text-destructive">
+                <div
+                  id="login-errors"
+                  aria-live="polite"
+                  className="min-h-5 text-sm text-destructive"
+                  data-testid={`${testIdPrefix}-error`}
+                >
                   {errorText}
                 </div>
-                <Button type="submit" loading={auth.isLoading} className="w-full" disabled={!apiKeyValue.trim()}>
+                <Button
+                  type="submit"
+                  loading={auth.isLoading}
+                  className="w-full"
+                  disabled={!apiKeyValue.trim()}
+                  data-testid={`${testIdPrefix}-submit`}
+                >
                   Sign in
                 </Button>
               </form>
@@ -191,10 +231,21 @@ export function LoginPage(props: LoginPageProps) {
 
             {mode === "oidc" ? (
               <div className="space-y-4">
-                <Button type="button" onClick={onOidcStart} loading={auth.isLoading} className="w-full">
+                <Button
+                  type="button"
+                  onClick={onOidcStart}
+                  loading={auth.isLoading}
+                  className="w-full"
+                  data-testid={`${testIdPrefix}-oidc-submit`}
+                >
                   {props.oidcButtonLabel ?? "Continue with SSO"}
                 </Button>
-                <div id="login-errors" aria-live="polite" className="min-h-5 text-sm text-destructive">
+                <div
+                  id="login-errors"
+                  aria-live="polite"
+                  className="min-h-5 text-sm text-destructive"
+                  data-testid={`${testIdPrefix}-error`}
+                >
                   {errorText}
                 </div>
               </div>

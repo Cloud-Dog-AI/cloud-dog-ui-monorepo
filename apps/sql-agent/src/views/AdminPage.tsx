@@ -172,8 +172,11 @@ export function AdminPage() {
             title="Add Role Binding"
             fields={rbacFields}
             values={rbacForm}
-            onChange={(name, value) => setRbacForm((prev) => ({ ...prev, [name]: value }))}
+            onChange={(name, value) => setRbacForm((prev) => ({ ...prev, [name]: String(value ?? '') }))}
             onSubmit={() => void saveRbacBinding()}
+            onCancel={() => setRbacDialogOpen(false)}
+            mode="add"
+            submitLabel="Add binding"
             idPrefix="rbac"
           />
         </PanelCard>

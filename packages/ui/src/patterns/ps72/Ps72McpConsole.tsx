@@ -22,7 +22,6 @@
 import * as React from "react";
 import { Button } from "../../components/button/Button";
 import { Input } from "../../components/input/Input";
-import { Textarea } from "../../components/input/Textarea";
 import { Ps72ApiKeyField, Ps72HealthBadge, Ps72ResultMeta } from "./Ps72Parts";
 import {
   type Ps72ExecuteResult,
@@ -54,6 +53,14 @@ export type Ps72McpConsoleProps = Readonly<{
   docsHref: string;
   /** Jobs page target (§4.4 / PS-76). */
   jobsHref: string;
+  /**
+   * Optional service-specific controls that feed the request adapter. This is
+   * the PS-72 uncommon-functionality extension point; it must not replace the
+   * shared tool list, request editor, submit, result, or meta panel.
+   */
+  extensionSlot?: React.ReactNode;
+  /** Optional adapter for service-local defaults before the shared execute call. */
+  requestAdapter?: (toolName: string, args: unknown) => unknown | Promise<unknown>;
   /** Execute a tool call; override is the admin API key (blank => bound identity). */
   onExecute: (toolName: string, args: unknown, overrideKey: string) => Promise<Ps72ExecuteResult>;
 }>;
@@ -95,8 +102,15 @@ function extractJobId(body: unknown): string | null {
 
 export function Ps72McpConsole(props: Ps72McpConsoleProps) {
   const [selectedTool, setSelectedTool] = React.useState(props.tools.find((t) => t.bound !== false)?.name ?? props.tools[0]?.name ?? "");
+  const initialTool = React.useMemo(
+    () => props.tools.find((t) => t.name === selectedTool),
+    [props.tools, selectedTool],
+  );
   const [search, setSearch] = React.useState("");
-  const [requestText, setRequestText] = React.useState("{}");
+  const [requestText, setRequestText] = React.useState(() => (
+    initialTool ? JSON.stringify(buildArgsTemplate(initialTool), null, 2) : "{}"
+  ));
+  const [requestDirty, setRequestDirty] = React.useState(false);
   const [overrideKey, setOverrideKey] = React.useState("");
   const [running, setRunning] = React.useState(false);
   const [result, setResult] = React.useState<unknown | null>(null);
@@ -124,18 +138,22 @@ export function Ps72McpConsole(props: Ps72McpConsoleProps) {
     if (next) {
       setSelectedTool(next);
       const tool = props.tools.find((t) => t.name === next);
-      if (tool) setRequestText(JSON.stringify(buildArgsTemplate(tool), null, 2));
+      if (tool) {
+        setRequestText(JSON.stringify(buildArgsTemplate(tool), null, 2));
+        setRequestDirty(false);
+      }
     }
   }, [props.tools, selectedTool]);
 
   const selectTool = (tool: Ps72McpTool) => {
-    if (requestText.trim() && requestText.trim() !== "{}" && tool.name !== selectedTool) {
+    if (requestDirty && tool.name !== selectedTool) {
       // §3.5 no silent data loss — confirm before discarding an edited request.
       const ok = typeof window === "undefined" ? true : window.confirm("Discard the current request and switch tools?");
       if (!ok) return;
     }
     setSelectedTool(tool.name);
     setRequestText(JSON.stringify(buildArgsTemplate(tool), null, 2));
+    setRequestDirty(false);
     setResult(null);
     setMeta(null);
     setDenied(false);
@@ -156,13 +174,14 @@ export function Ps72McpConsole(props: Ps72McpConsoleProps) {
     setRunning(true);
     const startedAt = performance.now();
     try {
-      const exec = await props.onExecute(selectedTool, parsed, overrideKey);
+      const adapted = props.requestAdapter ? await props.requestAdapter(selectedTool, parsed) : parsed;
+      const exec = await props.onExecute(selectedTool, adapted, overrideKey);
       const durationMs = performance.now() - startedAt;
       const detectedJob = exec.jobId ?? extractJobId(exec.body);
-      const status: Ps72LifecycleState = exec.denied ? "failed" : detectedJob ? "queued" : "succeeded";
-      const clientGenerated = !exec.correlationId || !exec.requestId;
+      const status: Ps72LifecycleState = exec.denied || exec.httpStatus >= 400 ? "failed" : detectedJob ? "queued" : "succeeded";
+      const clientGenerated = exec.clientGenerated ?? (!exec.correlationId || !exec.requestId);
       setResult(exec.body);
-      setDenied(exec.denied);
+      setDenied(exec.denied || exec.httpStatus >= 400);
       setJobId(detectedJob);
       setMeta({
         correlationId: exec.correlationId && exec.correlationId.trim() ? exec.correlationId : `client-${crypto.randomUUID()}`,
@@ -189,11 +208,11 @@ export function Ps72McpConsole(props: Ps72McpConsoleProps) {
   };
 
   return (
-    <div data-testid="mcp-console-page" className="flex flex-col gap-3">
+    <div data-testid="mcp-console-page" className="flex min-w-0 max-w-full flex-col gap-3 overflow-x-hidden">
       {/* §1 header: title + status badge + Docs link */}
       <div className="flex items-center justify-between gap-3">
         <div className="flex items-center gap-3">
-          <h2 className="text-lg font-semibold">MCP Console</h2>
+          <h1 className="text-lg font-semibold">MCP Console</h1>
           <Ps72HealthBadge state={props.health} testId="mcp-console-status-badge" />
         </div>
         <a data-testid="mcp-console-docs-link" href={props.docsHref} className="text-sm font-medium text-sky-700 hover:underline">
@@ -201,9 +220,9 @@ export function Ps72McpConsole(props: Ps72McpConsoleProps) {
         </a>
       </div>
 
-      <div className="flex rounded-md border bg-background">
+      <div className="grid min-w-0 grid-cols-1 rounded-md border bg-background lg:grid-cols-[15rem_minmax(0,1fr)]">
         {/* §1/§3 left scrolling tool list with search */}
-        <div className="w-60 shrink-0 border-r p-3">
+        <div className="min-w-0 border-b p-3 lg:border-b-0 lg:border-r">
           <Input
             data-testid="mcp-console-tool-search"
             value={search}
@@ -214,20 +233,19 @@ export function Ps72McpConsole(props: Ps72McpConsoleProps) {
           <div className="mt-1 text-xs text-slate-500">
             {props.tools.length} tools (<span data-testid="mcp-console-tool-count">{props.tools.length}</span>)
           </div>
-          <ul data-testid="mcp-console-tool-list" className="mt-2 max-h-80 space-y-1 overflow-y-auto" aria-label="Available tools">
+          <ul data-testid="mcp-console-tool-list" className="mt-2 max-h-[32rem] space-y-1 overflow-y-auto" aria-label="Available tools">
             {filteredTools.map((tool) => {
               const locked = tool.bound === false;
               return (
                 <li key={tool.name}>
-                  <button
-                    type="button"
-                    data-testid={`mcp-console-tool-${tool.name}`}
-                    data-locked={locked ? "true" : "false"}
-                    disabled={locked}
-                    title={locked ? "You are not bound to this tool. Ask an administrator." : tool.description}
-                    className={`w-full rounded-md px-2 py-1 text-left text-sm hover:bg-muted/50 ${
-                      tool.name === selectedTool ? "bg-primary/10 font-medium" : ""
-                    } ${locked ? "cursor-not-allowed text-slate-400" : ""}`}
+	                  <button
+	                    type="button"
+	                    data-testid={`mcp-console-tool-${tool.name}`}
+	                    data-locked={locked ? "true" : "false"}
+	                    title={locked ? "You are not bound to this tool. Ask an administrator." : tool.description}
+                    className={`w-full overflow-hidden text-ellipsis rounded-md px-2 py-1 text-left text-sm hover:bg-muted/50 ${
+	                      tool.name === selectedTool ? "bg-primary/10 font-medium" : ""
+                    } ${locked ? "cursor-not-allowed text-slate-600" : ""}`}
                     onClick={() => selectTool(tool)}
                   >
                     {locked ? "Locked: " : ""}
@@ -241,22 +259,36 @@ export function Ps72McpConsole(props: Ps72McpConsoleProps) {
         </div>
 
         {/* §1 centre: request editor → apikey → submit → result+meta (same card) */}
-        <div className="min-w-0 flex-1 space-y-3 p-4">
-          <div className="text-xs text-muted-foreground">{props.endpointUrl}</div>
+        <div className="min-w-0 space-y-3 p-4">
+          <div className="max-w-full overflow-hidden text-ellipsis whitespace-nowrap text-xs text-muted-foreground">{props.endpointUrl}</div>
 
-          <label data-testid="mcp-console-request-label" className="block text-xs font-semibold uppercase tracking-wide text-slate-600" htmlFor="mcp-console-request-editor">
+          {props.extensionSlot ? (
+            <div data-testid="mcp-console-extension-slot" className="rounded-md border bg-muted/20 p-3">
+              {props.extensionSlot}
+            </div>
+          ) : null}
+
+	          <label data-testid="mcp-console-request-label" className="block text-xs font-semibold uppercase tracking-wide text-slate-600" htmlFor="mcp-console-request-editor-input">
             Request
           </label>
-          <Textarea
-            id="mcp-console-request-editor"
-            data-testid="mcp-console-request-editor"
-            value={requestText}
-            onChange={(event) => setRequestText(event.target.value)}
-            className="font-mono text-xs"
-            aria-label="Request"
-            rows={6}
-            readOnly={activeLocked}
-          />
+	          <label
+	            id="mcp-console-request-editor"
+	            data-testid="mcp-console-request-editor"
+	            className="block"
+	          >
+	            <span className="sr-only">Request JSON</span>
+	            <textarea
+	              id="mcp-console-request-editor-input"
+	              value={requestText}
+	              onChange={(event) => {
+	                setRequestText(event.target.value);
+	                setRequestDirty(true);
+	              }}
+	              readOnly={activeLocked}
+	              aria-label="Request"
+	              className="h-[220px] w-full resize-y rounded-md border bg-card p-3 font-mono text-sm text-card-foreground shadow-sm outline-none focus:ring-2 focus:ring-primary/40"
+	            />
+	          </label>
 
           <Ps72ApiKeyField
             testIdPrefix="mcp-console"

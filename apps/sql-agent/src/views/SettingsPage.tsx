@@ -38,7 +38,7 @@ type AppRuntimeConfig = {
 };
 
 const SENSITIVE_KEY =
-  /password|secret|token|api_?key|authorization|bearer|credential|private_key|client_secret|access_key|refresh_token|certificate|ssl_?key/i;
+  /password|secret|token|api_?key|(^|[._-])key$|authorization|bearer|credential|private_key|client_secret|access_key|refresh_token|certificate|ssl_?key/i;
 
 const MASK_TOKEN = '--------';
 
@@ -284,8 +284,8 @@ export function SettingsPage() {
 
   const raw = config.data ?? {};
   const maskedFull = React.useMemo(() => maskSecretsDeep(raw) as Record<string, unknown>, [config.data]);
-  const configTree = React.useMemo(() => buildServerConfig(maskedFull, activeServer), [activeServer, maskedFull]);
-  const sourceMap = React.useMemo(() => collectSourceMap(configTree), [configTree]);
+  const effectiveConfig = React.useMemo(() => buildServerConfig(maskedFull, activeServer), [activeServer, maskedFull]);
+  const sourceMap = React.useMemo(() => collectSourceMap(effectiveConfig), [effectiveConfig]);
   const leafCount = React.useMemo(() => Object.keys(sourceMap).length, [sourceMap]);
   const isAdmin = Boolean(
     auth.user?.roles?.some((role) => ['admin', 'system_admin'].includes(role)) ||
@@ -353,7 +353,7 @@ export function SettingsPage() {
                 <div>
                   <h2 className="text-lg font-semibold">Effective configuration</h2>
                   <p className="text-sm text-muted-foreground">
-                    API version {version.error ? '(unavailable)' : (version.data?.version ?? 'N/A')} · {leafCount} visible leaves · secrets masked by default.
+                    Inspect effective configuration. API version {version.error ? '(unavailable)' : (version.data?.version ?? 'N/A')} · {leafCount} visible leaves · secrets masked by default.
                   </p>
                 </div>
                 {isAdmin ? (
@@ -394,6 +394,7 @@ export function SettingsPage() {
                     <Button
                       key={tab}
                       type="button"
+                      role="tab"
                       variant={activeServer === tab ? 'default' : 'secondary'}
                       data-testid={`settings-server-tab-${tab}`}
                       aria-selected={activeServer === tab}
@@ -413,7 +414,7 @@ export function SettingsPage() {
                 />
               </div>
               <JsonExplorer
-                data={configTree}
+                data={effectiveConfig}
                 title="SQL Agent effective config"
                 defaultExpanded
                 maxDepth={16}

@@ -20,6 +20,8 @@ import type {
   DataCreateResult,
   DataMutationResult,
   DataReadResult,
+  DiscoveryFieldItem,
+  DiscoveryResult,
   EntityDetail,
   EntityItem,
   GroupSummary,
@@ -32,12 +34,17 @@ import type {
   PingSummary,
   PrincipalSummary,
   ProfileDraft,
+  ProfileScopeTestApiResult,
   ProfileSummary,
   RelationshipItem,
   ResourceMetricsSummary,
+  SavedQueryDraft,
+  SavedQuerySummary,
   SearchExplain,
   SearchItem,
   SearchRelatedItem,
+  SourceConnectionDraft,
+  SourceConnectionSummary,
   UserSummary,
 } from "./types";
 
@@ -58,10 +65,22 @@ export type DbMcpApi = Readonly<{
   getConfigSources: () => Promise<ConfigSourcesResponse>;
   auditSettingsReveal: () => Promise<void>;
   jobsHealth: () => Promise<JobsHealth>;
+  listSourceConnections: () => Promise<SourceConnectionSummary[]>;
+  createSourceConnection: (payload: SourceConnectionDraft) => Promise<SourceConnectionSummary>;
+  updateSourceConnection: (name: string, payload: Omit<SourceConnectionDraft, "name" | "source_type">) => Promise<SourceConnectionSummary>;
+  deleteSourceConnection: (name: string) => Promise<void>;
+  testSourceConnection: (name: string) => Promise<SourceConnectionSummary>;
+  discoverNamespaces: (payload: { profile_id?: string; connection_name?: string; refresh?: boolean; ttl_seconds?: number }) => Promise<DiscoveryResult<NamespaceItem>>;
+  discoverEntities: (payload: { profile_id: string; namespace: string; refresh?: boolean; ttl_seconds?: number }) => Promise<DiscoveryResult<EntityItem>>;
+  discoverFields: (payload: { profile_id: string; namespace: string; entity: string; refresh?: boolean; ttl_seconds?: number }) => Promise<DiscoveryResult<DiscoveryFieldItem>>;
   listProfiles: () => Promise<ProfileSummary[]>;
   createProfile: (payload: ProfileDraft) => Promise<ProfileSummary>;
   updateProfile: (profileId: string, payload: ProfileDraft) => Promise<ProfileSummary>;
   deleteProfile: (profileId: string) => Promise<void>;
+  testProfileScope: (profileId: string, profile?: ProfileDraft) => Promise<ProfileScopeTestApiResult>;
+  listSavedQueries: (pageKey: string) => Promise<SavedQuerySummary[]>;
+  createSavedQuery: (payload: SavedQueryDraft) => Promise<SavedQuerySummary>;
+  deleteSavedQuery: (queryId: number) => Promise<void>;
   listUsers: () => Promise<UserSummary[]>;
   createUser: (payload: Record<string, unknown>) => Promise<UserSummary>;
   updateUser: (userId: string, payload: Record<string, unknown>) => Promise<UserSummary>;
@@ -106,7 +125,18 @@ export type DbMcpApi = Readonly<{
   syncProfile: (profileId: string) => Promise<Record<string, unknown>>;
   rebuildIndex: (profileIds?: string[]) => Promise<Record<string, unknown>>;
   planSchemaChange: (profileId: string, operation: Record<string, unknown>) => Promise<Record<string, unknown>>;
+  approveSchemaChange: (planId: string, payload?: Record<string, unknown>) => Promise<Record<string, unknown>>;
   applySchemaChange: (profileId: string, plan: Record<string, unknown>) => Promise<Record<string, unknown>>;
+  // W28E-1870-E database change-watch REST surface (PS-102 §5.5 / CSTREAM-DB-001).
+  listWatches: (profile: string) => Promise<JsonRecord[]>;
+  createWatch: (profile: string, criteria: Record<string, unknown>) => Promise<JsonRecord>;
+  pauseWatch: (profile: string, watchId: string) => Promise<JsonRecord>;
+  resumeWatch: (profile: string, watchId: string) => Promise<JsonRecord>;
+  deleteWatch: (profile: string, watchId: string) => Promise<void>;
+  watchBatch: (profile: string, watchId: string, maxBatch?: number) => Promise<JsonRecord>;
+  ackWatch: (profile: string, watchId: string, ackCursor: string) => Promise<JsonRecord>;
+  recoverWatch: (profile: string, watchId: string) => Promise<JsonRecord>;
+  watchTestEvent: (profile: string, watchId: string) => Promise<JsonRecord>;
 }>;
 
 function asArray<T>(value: unknown): T[] {
@@ -171,6 +201,7 @@ export function createDbMcpApi(opts: {
 
   const safeGet = <T>(path: string) => withAuthError(() => client.get<T>(path), opts.onAuthError);
   const safePost = <T>(path: string, payload: unknown) => withAuthError(() => client.post<T>(path, payload), opts.onAuthError);
+  const safePatch = <T>(path: string, payload: unknown) => withAuthError(() => client.patch<T>(path, payload), opts.onAuthError);
   const safePut = <T>(path: string, payload: unknown) => withAuthError(() => client.put<T>(path, payload), opts.onAuthError);
   const safeDelete = (path: string) => withAuthError(() => client.delete(path), opts.onAuthError);
 
@@ -191,11 +222,28 @@ export function createDbMcpApi(opts: {
       await safePost("/webapi/v1/config/audit-reveal", {});
     },
     jobsHealth: () => safeGet<JobsHealth>("/webapi/v1/jobs/health"),
+    listSourceConnections: () => safeGet<SourceConnectionSummary[]>("/webapi/v1/admin/source-connections"),
+    createSourceConnection: (payload) => safePost<SourceConnectionSummary>("/webapi/v1/admin/source-connections", payload),
+    updateSourceConnection: (name, payload) => safePatch<SourceConnectionSummary>(`/webapi/v1/admin/source-connections/${encodeURIComponent(name)}`, payload),
+    deleteSourceConnection: async (name) => {
+      await safeDelete(`/webapi/v1/admin/source-connections/${encodeURIComponent(name)}`);
+    },
+    testSourceConnection: (name) => safePost<SourceConnectionSummary>(`/webapi/v1/admin/source-connections/${encodeURIComponent(name)}/test`, {}),
+    discoverNamespaces: (payload) => safePost<DiscoveryResult<NamespaceItem>>("/webapi/v1/admin/discovery/namespaces", payload),
+    discoverEntities: (payload) => safePost<DiscoveryResult<EntityItem>>("/webapi/v1/admin/discovery/entities", payload),
+    discoverFields: (payload) => safePost<DiscoveryResult<DiscoveryFieldItem>>("/webapi/v1/admin/discovery/fields", payload),
     listProfiles: () => safeGet<ProfileSummary[]>("/webapi/v1/profiles"),
     createProfile: (payload) => safePost<ProfileSummary>("/webapi/v1/profiles", payload),
     updateProfile: (profileId, payload) => safePut<ProfileSummary>(`/webapi/v1/profiles/${profileId}`, payload),
     deleteProfile: async (profileId) => {
       await safeDelete(`/webapi/v1/profiles/${profileId}`);
+    },
+    testProfileScope: (profileId, profile) =>
+      safePost<ProfileScopeTestApiResult>(`/webapi/v1/admin/profiles/${encodeURIComponent(profileId)}/test-scope`, profile ? { profile } : {}),
+    listSavedQueries: (pageKey) => safeGet<SavedQuerySummary[]>(`/webapi/v1/admin/saved-queries?page_key=${encodeURIComponent(pageKey)}`),
+    createSavedQuery: (payload) => safePost<SavedQuerySummary>("/webapi/v1/admin/saved-queries", payload),
+    deleteSavedQuery: async (queryId) => {
+      await safeDelete(`/webapi/v1/admin/saved-queries/${queryId}`);
     },
     listUsers: () => safeGet<UserSummary[]>("/webapi/v1/users"),
     createUser: (payload) => safePost<UserSummary>("/webapi/v1/users", payload),
@@ -263,6 +311,38 @@ export function createDbMcpApi(opts: {
     syncProfile: (profileId) => callTool<Record<string, unknown>>("index.sync_profile", { profile_id: profileId }),
     rebuildIndex: (profileIds) => callTool<Record<string, unknown>>("index.rebuild", { profile_ids: profileIds ?? [] }),
     planSchemaChange: (profileId, operation) => callTool<Record<string, unknown>>("schema.change.plan", { profile_id: profileId, operation }),
+    approveSchemaChange: (planId, payload = {}) =>
+      safePost<Record<string, unknown>>(`/webapi/v1/schema-changes/${encodeURIComponent(planId)}/approve`, payload),
     applySchemaChange: (profileId, plan) => callTool<Record<string, unknown>>("schema.change.apply", { profile_id: profileId, plan }),
+    // W28E-1870-E change-watch REST surface — success-enveloped bodies (client unwraps .data).
+    listWatches: (profile) =>
+      safeGet<{ watches?: JsonRecord[] }>(`/webapi/v1/watches?profile=${encodeURIComponent(profile)}`).then((body) =>
+        asArray<JsonRecord>(asRecord(body).watches),
+      ),
+    createWatch: (profile, criteria) =>
+      safePost<JsonRecord>("/webapi/v1/watches", { profile, criteria }).then((body) => asRecord(body)),
+    pauseWatch: (profile, watchId) =>
+      safePost<JsonRecord>(`/webapi/v1/watches/${encodeURIComponent(watchId)}/pause`, { profile }).then((body) => asRecord(body)),
+    resumeWatch: (profile, watchId) =>
+      safePost<JsonRecord>(`/webapi/v1/watches/${encodeURIComponent(watchId)}/resume`, { profile }).then((body) => asRecord(body)),
+    deleteWatch: async (profile, watchId) => {
+      await safeDelete(`/webapi/v1/watches/${encodeURIComponent(watchId)}?profile=${encodeURIComponent(profile)}`);
+    },
+    watchBatch: (profile, watchId, maxBatch = 100) =>
+      safeGet<JsonRecord>(
+        `/webapi/v1/watches/${encodeURIComponent(watchId)}/events?profile=${encodeURIComponent(profile)}&max_batch=${maxBatch}`,
+      ).then((body) => asRecord(body)),
+    ackWatch: (profile, watchId, ackCursor) =>
+      safePost<JsonRecord>(`/webapi/v1/watches/${encodeURIComponent(watchId)}/ack`, { profile, ack_cursor: ackCursor }).then((body) =>
+        asRecord(body),
+      ),
+    recoverWatch: (profile, watchId) =>
+      safePost<JsonRecord>(`/webapi/v1/watches/${encodeURIComponent(watchId)}/recover`, { profile }).then((body) => asRecord(body)),
+    watchTestEvent: (profile, watchId) =>
+      safePost<JsonRecord>(`/webapi/v1/watches/${encodeURIComponent(watchId)}/test-event`, {
+        profile,
+        action: "created",
+        object_ref: "webui-test",
+      }).then((body) => asRecord(body)),
   };
 }

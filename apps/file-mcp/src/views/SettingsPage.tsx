@@ -26,10 +26,10 @@ import {
   Card,
   CardContent,
   CardHeader,
-  Input,
   JsonBlock,
-  JsonExplorer,
+  SettingsPanel,
   type JsonExplorerSourceMap,
+  type SettingsPanelServerTab,
 } from "@cloud-dog/ui";
 import type { EffectiveConfigResponse } from "../lib/types";
 import { useFileMcpState } from "../state/AppState";
@@ -93,15 +93,20 @@ export function SettingsPage() {
   const [error, setError] = React.useState<string | null>(null);
 
   const loadedRef = React.useRef(false);
+  const loadConfig = React.useCallback(async () => {
+    try {
+      const payload = await api.getEffectiveConfig();
+      setEffective(payload);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to load effective config.");
+    }
+  }, [api]);
+
   React.useEffect(() => {
     if (loadedRef.current) return;
     loadedRef.current = true;
-    void api
-      .getEffectiveConfig()
-      .then((payload) => setEffective(payload))
-      .catch((e) => setError(e instanceof Error ? e.message : "Failed to load effective config."));
-  }, [api]);
-
+    void loadConfig();
+  }, [loadConfig]);
   const sources = React.useMemo<JsonExplorerSourceMap>(
     () => (effective?.sources ?? {}) as JsonExplorerSourceMap,
     [effective]
@@ -112,9 +117,16 @@ export function SettingsPage() {
   );
 
   const baseConfig = revealedConfig ?? effective?.config ?? {};
-  const tabData = React.useMemo(
-    () => pruneForServer(baseConfig, sources, activeTab) ?? {},
-    [baseConfig, sources, activeTab]
+  const serverTabs = React.useMemo<SettingsPanelServerTab[]>(
+    () =>
+      SERVERS.map((server) => ({
+        id: server,
+        label: server === "all" ? "ALL" : server.toUpperCase(),
+        data: pruneForServer(baseConfig, sources, server) ?? {},
+        sources,
+        description: `Effective config - ${server.toUpperCase()}`,
+      })),
+    [baseConfig, sources],
   );
 
   const runHealthCheck = async () => {
@@ -159,23 +171,35 @@ export function SettingsPage() {
 
   return (
     <div className="space-y-6" data-testid="settings-page">
-      <header className="flex items-center justify-between gap-3">
-        <div className="flex items-center gap-2">
-          <h1 className="text-2xl font-semibold">Settings</h1>
-          {counts ? <Badge variant="secondary">{counts.total_keys} keys · {counts.secret_keys} secret</Badge> : null}
-        </div>
-        <div className="flex flex-wrap gap-2">
-          <Button variant="secondary" onClick={() => void runHealthCheck()}>Run health check</Button>
-          {isAdmin ? (
-            <Button variant="secondary" data-testid="settings-export" onClick={exportConfig}>
-              Download effective config
-            </Button>
-          ) : null}
-        </div>
-      </header>
-
-      {error ? <p role="alert" className="text-sm text-destructive">{error}</p> : null}
-      {status ? <p role="status" className="text-sm text-foreground/80">{status}</p> : null}
+      <SettingsPanel
+        title="Settings"
+        serviceName="file-mcp"
+        description="Effective configuration with source attribution and masked secrets."
+        statusItems={counts ? [
+          { label: "keys", value: counts.total_keys },
+          { label: "secrets", value: counts.secret_keys },
+        ] : undefined}
+        serverTabs={serverTabs}
+        activeServerId={activeTab}
+        onActiveServerChange={(serverId) => setActiveTab(serverId as ServerTab)}
+        searchTerm={search}
+        onSearchTermChange={setSearch}
+        revealedSecrets={revealedPaths}
+        loading={!effective}
+        error={error}
+        canExport={isAdmin}
+        onExport={exportConfig}
+        canRefresh
+        onRefresh={() => {
+          void loadConfig();
+        }}
+        canRevealSecrets={isAdmin}
+        secretsRevealed={revealedPaths.size > 0}
+        onRevealSecrets={revealedPaths.size > 0 ? hideSecrets : () => void revealSecrets()}
+        revealSecretsLabel="Reveal secrets"
+        hideSecretsLabel="Hide secrets"
+        footer={status ? <p role="status" className="text-sm text-foreground/80">{status}</p> : null}
+      >
 
       {/* SW2.1 Service Info (shallow display — JsonBlock allowed by SW1) */}
       <Card>
@@ -186,72 +210,6 @@ export function SettingsPage() {
             value={{ service: "file-mcp", ports: { api: 8060, web: 8061, mcp: 8062, a2a: 8063 }, status: "running" }}
             defaultCollapsed={false}
           />
-        </CardContent>
-      </Card>
-
-      {/* PS-73 v2 primary surface: effective configuration */}
-      <Card>
-        <CardHeader>
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <h2 className="text-lg font-semibold">Effective Configuration</h2>
-            {isAdmin ? (
-              revealedPaths.size > 0 ? (
-                <Button variant="secondary" size="sm" data-testid="settings-hide-secrets" onClick={hideSecrets}>
-                  Hide secrets
-                </Button>
-              ) : (
-                <Button variant="secondary" size="sm" data-testid="settings-reveal-secrets" onClick={() => void revealSecrets()}>
-                  Reveal secrets (admin)
-                </Button>
-              )
-            ) : null}
-          </div>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          {/* SW11 page-level search across all server tabs */}
-          <Input
-            data-testid="settings-search"
-            value={search}
-            onChange={(event) => setSearch(event.target.value)}
-            placeholder="Search settings — keys and values across all servers"
-            aria-label="Search settings"
-          />
-
-          {/* SW9 per-server tabs */}
-          <div className="flex flex-wrap gap-2" role="tablist" aria-label="Server tabs">
-            {SERVERS.map((server) => (
-              <button
-                key={server}
-                type="button"
-                role="tab"
-                aria-selected={activeTab === server}
-                data-testid={`settings-server-tab-${server}`}
-                onClick={() => setActiveTab(server)}
-                className={
-                  "rounded-md border px-3 py-1 text-sm " +
-                  (activeTab === server ? "border-primary bg-primary/10 font-medium" : "border-slate-300 hover:bg-muted/40")
-                }
-              >
-                {server.toUpperCase()}
-              </button>
-            ))}
-          </div>
-
-          {effective ? (
-            <JsonExplorer
-              key={activeTab}
-              title={`Effective config — ${activeTab.toUpperCase()}`}
-              data={tabData}
-              sources={sources}
-              maskToken="--------"
-              revealedSecrets={revealedPaths}
-              searchTerm={search}
-              hideInternalSearch
-              defaultExpanded
-            />
-          ) : (
-            <p className="text-sm text-muted-foreground">Loading effective configuration…</p>
-          )}
         </CardContent>
       </Card>
 
@@ -270,6 +228,7 @@ export function SettingsPage() {
           <Button onClick={() => void runHealthCheck()} className="mt-2">Refresh</Button>
         </CardContent>
       </Card>
+      </SettingsPanel>
     </div>
   );
 }

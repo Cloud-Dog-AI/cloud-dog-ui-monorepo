@@ -37,8 +37,8 @@ import {
 } from "lucide-react";
 import { BaseRuntimeConfigSchema, ConfigProvider, useConfig } from "@cloud-dog/config";
 import { AuthProvider, LoginPage, SessionTimeoutProvider, useAuth } from "@cloud-dog/auth";
-import { AboutDialog, CopyrightFooter, DocLinks, ProfileDialog, ShellLayout } from "@cloud-dog/shell";
-import type { NavItemType } from "@cloud-dog/shell";
+import { AboutDialog, AboutPage, CopyrightFooter, DocLinks, ProfileDialog, ServiceStatusBar, ShellLayout } from "@cloud-dog/shell";
+import type { NavItemType, ServiceStatus } from "@cloud-dog/shell";
 import { Button, Spinner, ToastProvider } from "@cloud-dog/ui";
 import { manifest } from "./manifest";
 import { AppStateProvider, useFileMcpState } from "../state/AppState";
@@ -49,16 +49,40 @@ import { SearchPage } from "../views/SearchPage";
 import { StorageProfilesPage } from "../views/StorageProfilesPage";
 import { AuditLogPage } from "../views/AuditLogPage";
 import { SettingsPage } from "../views/SettingsPage";
-import { AdminIdentityPage } from "../views/AdminIdentityPage";
-import { AdminUsersPage } from "../views/AdminUsersPage";
-import { AdminGroupsPage } from "../views/AdminGroupsPage";
-import { AdminApiKeysPage } from "../views/AdminApiKeysPage";
-import { AdminRbacPageView } from "../views/AdminRbacPage";
+import {
+  IdamUsersPage,
+  IdamGroupsPage,
+  IdamApiKeysPage,
+  IdamRolesPage,
+  IdamRbacPage,
+} from "@cloud-dog/idam";
 import { GoogleDriveSettingsPage } from "../views/GoogleDriveSettingsPage";
 import { McpConsolePage } from "../views/McpConsolePage";
 import { A2aConsolePage } from "../views/A2aConsolePage";
 import { ApiDocsPage } from "../views/ApiDocsPage";
 import { JobsPage } from "../views/JobsPage";
+import { WatchesPage } from "../views/WatchesPage";
+
+const ROUTES = {
+  dashboard: "/",
+  catalogue: "/catalogue",
+  search: "/search",
+  storageProfiles: "/storage-profiles",
+  watches: "/watches",
+  auditLog: "/audit-log",
+  googleDriveSettings: "/google-drive-settings",
+  adminUsers: "/admin/users",
+  adminGroups: "/admin/groups",
+  adminApiKeys: "/admin/api-keys",
+  adminRoles: "/admin/roles",
+  adminRbac: "/admin/rbac",
+  apiDocs: "/developer/api-docs",
+  mcpConsole: "/developer/mcp-console",
+  a2aConsole: "/developer/a2a-console",
+  jobs: "/system/jobs",
+  settings: "/system/settings",
+  about: "/system/about",
+} as const;
 
 const AppRuntimeConfigSchema = BaseRuntimeConfigSchema.extend({
   AUTH_MODE: z.enum(["api_key", "cookie", "oidc"]).default("api_key"),
@@ -70,6 +94,12 @@ const AppRuntimeConfigSchema = BaseRuntimeConfigSchema.extend({
   A2A_BASE_URL: z.string().optional(),
   SESSION_TIMEOUT_MINUTES: z.coerce.number().optional(),
   APP_VERSION: z.string().optional(),
+  // W28E-1863 fix-wave-a (WSC-014 / PS-30 UI-R7.3): build identity injected
+  // by the backend runtime-config (source commit + build date + deploy env).
+  APP_COMMIT: z.string().optional(),
+  APP_BUILD_DATE: z.string().optional(),
+  APP_CONTAINER_DIGEST: z.string().optional(),
+  APP_ENV: z.string().optional(),
   PRODUCT_NAME: z.string().optional(),
   PRODUCT_DESCRIPTION: z.string().optional(),
 });
@@ -77,6 +107,51 @@ const AppRuntimeConfigSchema = BaseRuntimeConfigSchema.extend({
 type AppRuntimeConfig = z.infer<typeof AppRuntimeConfigSchema>;
 
 const navIcon = (Icon: React.ElementType) => <Icon aria-hidden="true" className="h-4 w-4" />;
+
+// W28E-1863 fix-wave-c (WSC-014 / PS-30 UI-R7.3): build identity for the About page.
+// The file-mcp backend already emits build identity two ways at the deployed
+// `a282f7f`: (1) runtime-config.js APP_COMMIT/APP_BUILD_DATE (read via cfg below) and
+// (2) a same-origin `/version` JSON route. The About page prefers the runtime-config
+// values; this hook fetches `/version` as a fallback so the About page still renders
+// commit/build-date if the static runtime-config is stale — matching the estate
+// chart/geo/scheduler pattern. Passed to the shared @cloud-dog/shell AboutPage (which
+// already renders commitHash/buildDate) — no fork of the shared component.
+type BuildIdentity = { commitHash?: string; buildDate?: string };
+
+function useBuildIdentity(): BuildIdentity {
+  const [identity, setIdentity] = React.useState<BuildIdentity>({});
+  React.useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const resp = await fetch(`${window.location.origin}/version`, {
+          headers: { Accept: "application/json" },
+          credentials: "same-origin",
+        });
+        if (!resp.ok) return;
+        const data = (await resp.json()) as {
+          source_commit?: string;
+          commit?: string;
+          build_date?: string;
+        };
+        if (cancelled) return;
+        const commitHash = (data.source_commit ?? data.commit ?? "").trim();
+        const buildDate = (data.build_date ?? "").trim();
+        setIdentity({
+          commitHash: commitHash || undefined,
+          buildDate: buildDate || undefined,
+        });
+      } catch {
+        // Build identity is best-effort; the About page degrades to version-only.
+      }
+    };
+    void load();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+  return identity;
+}
 
 // ---------------------------------------------------------------------------
 // Fix 5: Persistent session timer display — mirrors SessionTimeoutProvider
@@ -133,15 +208,63 @@ function ShellApp() {
   const auth = useAuth();
   const cfg = useConfig<AppRuntimeConfig>();
   const app = useFileMcpState();
+  const buildIdentity = useBuildIdentity();
+  // Prefer the runtime-config build identity (APP_COMMIT/APP_BUILD_DATE); fall back
+  // to the same-origin /version fetch if the static runtime-config is stale/empty.
+  const aboutCommitHash = cfg.APP_COMMIT ?? buildIdentity.commitHash;
+  const aboutBuildDate = cfg.APP_BUILD_DATE ?? buildIdentity.buildDate;
 
   const [loginDraft, setLoginDraft] = React.useState(app.apiKey);
   const [aboutOpen, setAboutOpen] = React.useState(false);
   const [profileOpen, setProfileOpen] = React.useState(false);
   const canAccessGoogleDrive = canManageGoogleDriveSettings(app.currentUser ?? auth.user);
+  const [services, setServices] = React.useState<ServiceStatus[]>(() => [
+    { name: "API", url: app.apiBaseUrl, status: "unknown" },
+    { name: "MCP", url: app.mcpBaseUrl, status: "unknown" },
+    { name: "A2A", url: app.a2aBaseUrl, status: "unknown" },
+  ]);
 
   React.useEffect(() => {
     document.title = manifest.appName;
   }, []);
+
+  React.useEffect(() => {
+    if (!auth.isAuthenticated) return;
+    let cancelled = false;
+    const probe = async () => {
+      const apiUrl = `${app.apiBaseUrl.replace(/\/+$/, "")}/health`;
+      const mcpUrl = `${app.mcpBaseUrl}/health`;
+      const a2aUrl = `${app.a2aBaseUrl}/health`;
+      const next: ServiceStatus[] = [
+        { name: "API", url: apiUrl, status: "unknown" },
+        { name: "MCP", url: mcpUrl, status: "unknown" },
+        { name: "A2A", url: a2aUrl, status: "unknown" },
+      ];
+      try {
+        const result = await app.api.getHealth();
+        next[0] = { ...next[0], status: result.status === "ok" ? "ok" : "warning" };
+      } catch {
+        next[0] = { ...next[0], status: "error" };
+      }
+      try {
+        const tools = await app.api.listTools();
+        next[1] = { ...next[1], status: tools.length > 0 ? "ok" : "warning" };
+      } catch {
+        next[1] = { ...next[1], status: "error" };
+      }
+      try {
+        const a2aResult = await app.api.getA2aHealth();
+        const state = String((a2aResult as Record<string, unknown>)?.status ?? "").toLowerCase();
+        next[2] = { ...next[2], status: state === "ok" ? "ok" : "error" };
+      } catch {
+        next[2] = { ...next[2], status: "error" };
+      }
+      if (!cancelled) setServices(next);
+    };
+    void probe();
+    const id = window.setInterval(() => { void probe(); }, 15000);
+    return () => { cancelled = true; window.clearInterval(id); };
+  }, [auth.isAuthenticated, app.api, app.apiBaseUrl, app.mcpBaseUrl, app.a2aBaseUrl]);
 
   React.useEffect(() => {
     setLoginDraft(app.apiKey);
@@ -154,44 +277,46 @@ function ShellApp() {
       icon: navIcon(Folder),
       children: [
         { label: "Dashboard", path: "/", icon: navIcon(LayoutDashboard) },
-        { label: "File Browser", path: "/file-browser", icon: navIcon(Folder) },
-        { label: "Storage Profiles", path: "/storage-profiles", icon: navIcon(HardDrive) },
-        { label: "Search", path: "/search", icon: navIcon(Search) },
-        { label: "Audit Log", path: "/audit-log", icon: navIcon(ClipboardList) },
+        { label: "Catalogue", path: ROUTES.catalogue, icon: navIcon(Folder) },
+        { label: "Storage Profiles", path: ROUTES.storageProfiles, icon: navIcon(HardDrive) },
+        { label: "Change Watches", path: ROUTES.watches, icon: navIcon(Radio) },
+        { label: "Search", path: ROUTES.search, icon: navIcon(Search) },
+        { label: "Audit Log", path: ROUTES.auditLog, icon: navIcon(ClipboardList) },
         ...(canAccessGoogleDrive
-          ? [{ label: "Google Drive", path: "/google-drive-settings", icon: navIcon(HardDrive) }]
+          ? [{ label: "Google Drive", path: ROUTES.googleDriveSettings, icon: navIcon(HardDrive) }]
           : []),
       ],
     },
     {
       label: "Admin",
-      path: "/admin/users",
+      path: ROUTES.adminUsers,
       icon: navIcon(Users),
       children: [
-        { label: "Users", path: "/admin/users", icon: navIcon(Users) },
-        { label: "Groups", path: "/admin/groups", icon: navIcon(Users) },
-        { label: "API Keys", path: "/admin/api-keys", icon: navIcon(Key) },
-        { label: "RBAC", path: "/admin/rbac", icon: navIcon(Shield) },
+        { label: "Users", path: ROUTES.adminUsers, icon: navIcon(Users) },
+        { label: "Groups", path: ROUTES.adminGroups, icon: navIcon(Users) },
+        { label: "API Keys", path: ROUTES.adminApiKeys, icon: navIcon(Key) },
+        { label: "Roles", path: ROUTES.adminRoles, icon: navIcon(Shield) },
+        { label: "RBAC", path: ROUTES.adminRbac, icon: navIcon(Shield) },
       ],
     },
     {
       label: "Developer",
-      path: "/api-docs",
+      path: ROUTES.apiDocs,
       icon: navIcon(Wrench),
       children: [
-        { label: "API Docs", path: "/api-docs", icon: navIcon(FileText) },
-        { label: "MCP Console", path: "/mcp-console", icon: navIcon(Terminal) },
-        { label: "A2A Console", path: "/a2a-console", icon: navIcon(Radio) },
+        { label: "API Docs", path: ROUTES.apiDocs, icon: navIcon(FileText) },
+        { label: "MCP Console", path: ROUTES.mcpConsole, icon: navIcon(Terminal) },
+        { label: "A2A Console", path: ROUTES.a2aConsole, icon: navIcon(Radio) },
       ],
     },
     {
       label: "System",
-      path: "/jobs",
+      path: ROUTES.jobs,
       icon: navIcon(Activity),
       children: [
-        { label: "Jobs", path: "/jobs", icon: navIcon(Layers) },
-        { label: "Settings", path: "/settings", icon: navIcon(Settings) },
-        { label: "About", path: "/about", icon: navIcon(Info) },
+        { label: "Jobs", path: ROUTES.jobs, icon: navIcon(Layers) },
+        { label: "Settings", path: ROUTES.settings, icon: navIcon(Settings) },
+        { label: "About", path: ROUTES.about, icon: navIcon(Info) },
       ],
     },
   ];
@@ -252,38 +377,91 @@ function ShellApp() {
           displayName: auth.user?.displayName ?? "API key",
           email: auth.user?.email,
           onLogout,
-          onSettings: () => navigate("/settings"),
+          onSettings: () => navigate(ROUTES.settings),
           onProfile: () => setProfileOpen(true),
         }}
       >
         <div className="space-y-6">
+          <ServiceStatusBar services={services} />
           <Routes>
             <Route path="/" element={<DashboardPage />} />
             <Route path="/login" element={<Navigate to="/" replace />} />
             <Route path="/dashboard" element={<Navigate to="/" replace />} />
-            <Route path="/file-browser" element={<FileBrowserPage />} />
+            <Route path="/catalogue" element={<FileBrowserPage />} />
+            <Route path="/file-browser" element={<Navigate to={ROUTES.catalogue} replace />} />
             <Route path="/search" element={<SearchPage />} />
             <Route path="/storage-profiles" element={<StorageProfilesPage />} />
+            <Route path="/watches" element={<WatchesPage />} />
+            <Route path="/change-watches" element={<Navigate to={ROUTES.watches} replace />} />
+            <Route path="/profiles" element={<Navigate to={ROUTES.storageProfiles} replace />} />
+            <Route path="/source-connections" element={<Navigate to={ROUTES.storageProfiles} replace />} />
             <Route path="/audit-log" element={<AuditLogPage />} />
-            <Route path="/jobs" element={<JobsPage />} />
-            <Route path="/api-docs" element={<ApiDocsPage />} />
-            <Route path="/admin-identity" element={<Navigate to="/admin/identity" replace />} />
-            <Route path="/admin-rbac" element={<Navigate to="/admin/rbac" replace />} />
-            <Route path="/admin/identity" element={<Navigate to="/admin/users" replace />} />
-            <Route path="/admin/users" element={<AdminUsersPage />} />
-            <Route path="/admin/groups" element={<AdminGroupsPage />} />
-            <Route path="/admin/api-keys" element={<AdminApiKeysPage />} />
-            <Route path="/admin/rbac" element={<AdminRbacPageView />} />
-            <Route path="/admin" element={<Navigate to="/admin/users" replace />} />
+            <Route path="/audit" element={<Navigate to={ROUTES.auditLog} replace />} />
+            <Route path="/diagnostics-audit" element={<Navigate to={ROUTES.auditLog} replace />} />
+            <Route path="/observability" element={<Navigate to={ROUTES.auditLog} replace />} />
+            <Route path="/logs" element={<Navigate to={ROUTES.auditLog} replace />} />
+            <Route path="/system/jobs" element={<JobsPage />} />
+            <Route path="/developer/api-docs" element={<ApiDocsPage />} />
+            {/* PS-71 canonical IDAM routes — shared @cloud-dog/idam components (W28A-876) */}
+            <Route path="/admin/users" element={<IdamUsersPage apiBaseUrl="" />} />
+            <Route path="/admin/groups" element={<IdamGroupsPage apiBaseUrl="" />} />
+            <Route path="/admin/api-keys" element={<IdamApiKeysPage apiBaseUrl="" />} />
+            <Route path="/admin/roles" element={<IdamRolesPage apiBaseUrl="" />} />
+            <Route path="/admin/rbac" element={<IdamRbacPage apiBaseUrl="" />} />
+            <Route path="/idam" element={<Navigate to={ROUTES.adminUsers} replace />} />
+            <Route path="/idam/users" element={<Navigate to={ROUTES.adminUsers} replace />} />
+            <Route path="/idam/groups" element={<Navigate to={ROUTES.adminGroups} replace />} />
+            <Route path="/idam/api-keys" element={<Navigate to={ROUTES.adminApiKeys} replace />} />
+            <Route path="/idam/roles" element={<Navigate to={ROUTES.adminRoles} replace />} />
+            <Route path="/idam/rbac" element={<Navigate to={ROUTES.adminRbac} replace />} />
+            <Route path="/admin-identity" element={<Navigate to={ROUTES.adminUsers} replace />} />
+            <Route path="/admin-rbac" element={<Navigate to={ROUTES.adminRbac} replace />} />
+            <Route path="/admin/identity" element={<Navigate to={ROUTES.adminUsers} replace />} />
+            <Route path="/admin" element={<Navigate to={ROUTES.adminUsers} replace />} />
             <Route path="/google-drive-settings" element={<GoogleDriveSettingsPage />} />
-            <Route path="/mcp-console" element={<McpConsolePage />} />
-            <Route path="/a2a-console" element={<A2aConsolePage />} />
-            <Route path="/settings" element={<SettingsPage />} />
+            <Route path="/developer/mcp-console" element={<McpConsolePage />} />
+            <Route path="/developer/a2a-console" element={<A2aConsolePage />} />
+            <Route path="/system/settings" element={<SettingsPage />} />
+            {/* W28E-1845 / PS-WEBUI-URL-CANONICAL §11: canonical /system/about renders the
+                shared @cloud-dog/shell AboutPage as a page body; the existing About copy,
+                company and website (from the AboutDialog) are preserved via the
+                serviceProfile/docLinks extension slots (no-loss). /about 308s below. */}
             <Route
-              path="/about"
-              element={<AboutRoute onOpen={() => setAboutOpen(true)} />}
+              path="/system/about"
+              element={
+                <AboutPage
+                  productName={cfg.PRODUCT_NAME ?? manifest.appName}
+                  description={
+                    cfg.PRODUCT_DESCRIPTION ??
+                    "Language-neutral filesystem and document-manipulation tools for automation and agent workflows; exposes tools over an MCP/JSON-RPC-style boundary."
+                  }
+                  companyName="Viewdeck Engineering Limited"
+                  websiteUrl="https://cloud-dog.net"
+                  version={cfg.APP_VERSION}
+                  commitHash={aboutCommitHash}
+                  buildDate={aboutBuildDate}
+                  docLinks={
+                    <div className="flex flex-wrap gap-3">
+                      <a href={ROUTES.apiDocs} className="text-primary underline">API Docs</a>
+                      <a href={ROUTES.mcpConsole} className="text-primary underline">MCP Console</a>
+                      <a href={ROUTES.a2aConsole} className="text-primary underline">A2A Console</a>
+                      <a href={ROUTES.settings} className="text-primary underline">Settings</a>
+                    </div>
+                  }
+                />
+              }
             />
-            <Route path="*" element={<Navigate to="/" replace />} />
+            <Route path="/api-docs" element={<Navigate to={ROUTES.apiDocs} replace />} />
+            <Route path="/docs" element={<Navigate to={ROUTES.apiDocs} replace />} />
+            <Route path="/openapi" element={<Navigate to={ROUTES.apiDocs} replace />} />
+            <Route path="/mcp" element={<Navigate to={ROUTES.mcpConsole} replace />} />
+            <Route path="/mcp-console" element={<Navigate to={ROUTES.mcpConsole} replace />} />
+            <Route path="/a2a" element={<Navigate to={ROUTES.a2aConsole} replace />} />
+            <Route path="/a2a-console" element={<Navigate to={ROUTES.a2aConsole} replace />} />
+            <Route path="/jobs" element={<Navigate to={ROUTES.jobs} replace />} />
+            <Route path="/settings" element={<Navigate to={ROUTES.settings} replace />} />
+            <Route path="/about" element={<Navigate to={ROUTES.about} replace />} />
+            <Route path="*" element={<NotFoundRoute />} />
           </Routes>
 
           <div className="flex items-center justify-between border-t pt-3">
@@ -301,10 +479,10 @@ function ShellApp() {
             <div className="flex items-center gap-2">
               <SessionTimerDisplay timeoutMinutes={cfg.SESSION_TIMEOUT_MINUTES ?? 30} />
               <DocLinks links={[
-                { label: "API Docs", url: "/api-docs" },
-                { label: "MCP Console", url: "/mcp-console" },
-                { label: "A2A Console", url: "/a2a-console" },
-                { label: "Settings", url: "/settings" },
+                { label: "API Docs", url: ROUTES.apiDocs },
+                { label: "MCP Console", url: ROUTES.mcpConsole },
+                { label: "A2A Console", url: ROUTES.a2aConsole },
+                { label: "Settings", url: ROUTES.settings },
               ]} />
             </div>
           </div>
@@ -328,15 +506,13 @@ function ShellApp() {
   );
 }
 
-// Route stub: opens the canonical AboutDialog modal then redirects to home,
-// preserving the historical `/about` URL while routing through the platform
-// surface. The bespoke inline content was removed per W28A #38 (cross-service
-// consistency: AboutDialog modal is the canonical About surface).
-function AboutRoute({ onOpen }: { onOpen: () => void }) {
-  React.useEffect(() => {
-    onOpen();
-  }, [onOpen]);
-  return <Navigate to="/" replace />;
+function NotFoundRoute() {
+  return (
+    <div className="space-y-2">
+      <h1 className="text-2xl font-semibold tracking-normal">Not found</h1>
+      <p className="text-sm text-muted-foreground">The requested page does not exist.</p>
+    </div>
+  );
 }
 
 export function App() {
@@ -355,7 +531,7 @@ function AppWithProviders() {
       config={{
         mode: (cfg.AUTH_MODE === "cookie" ? "cookie" : "api_key") as "cookie" | "api_key",
         apiBaseUrl: cfg.API_BASE_URL,
-        cookie: { loginPath: "/auth/login", mePath: "/auth/me", logoutPath: "/auth/logout" },
+        cookie: { loginPath: "/auth/login", mePath: "/auth/me?optional=1", logoutPath: "/auth/logout" },
       }}
     >
       <ToastProvider>

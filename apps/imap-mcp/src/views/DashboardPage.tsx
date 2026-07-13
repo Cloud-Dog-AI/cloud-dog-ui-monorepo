@@ -15,6 +15,7 @@
 // @cloud-dog/app-imap-mcp — Shared dashboard layout for IMAP MCP operations.
 
 import * as React from "react";
+import { Link } from "react-router-dom";
 import { DashboardLayout, VersionInfo } from "@cloud-dog/shell";
 import {
   Button,
@@ -22,11 +23,12 @@ import {
   CardContent,
   CardHeader,
   DataTable,
-  HealthWidget,
   Input,
+  MetricCard,
   ResourceMetrics,
   Spinner,
-  StructuredView,
+  formatSeconds,
+  formatBytes,
   type DataColumn,
   type HealthStatus,
   type MetricItem,
@@ -49,23 +51,11 @@ function normaliseHealthStatus(value: string): HealthStatus {
   return "unknown";
 }
 
+// IMAP-302 / CX-170: moment-format uptime via shared helper.
 function formatUptime(value: unknown): string {
   const seconds = typeof value === "number" ? value : Number(value);
-  if (!Number.isFinite(seconds) || seconds < 0) return "N/A";
-  if (seconds < 60) return `${Math.round(seconds)}s`;
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) {
-    const remSec = Math.floor(seconds - minutes * 60);
-    return remSec > 0 ? `${minutes}m ${remSec}s` : `${minutes}m`;
-  }
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) {
-    const remMin = minutes - hours * 60;
-    return remMin > 0 ? `${hours}h ${remMin}m` : `${hours}h`;
-  }
-  const days = Math.floor(hours / 24);
-  const remHrs = hours - days * 24;
-  return remHrs > 0 ? `${days}d ${remHrs}h` : `${days}d`;
+  if (!Number.isFinite(seconds) || seconds < 0) return "—";
+  return formatSeconds(seconds);
 }
 
 function defaultMetrics(): MetricItem[] {
@@ -126,14 +116,22 @@ export function DashboardPage() {
 
     if (statusResult.ok && statusResult.data) {
       const data = statusResult.data as Record<string, unknown>;
-      const diskValue =
-        data.disk_percent ?? data.disk_used_percent ?? data.disk_usage_percent ?? data.storage_percent;
-      const diskUnit = diskValue == null ? undefined : "%";
+      // IMAP-303: disk metric — prefer cache_bytes_used (new backend field), then
+      // storage_bytes, then percentage; format with formatBytes.
+      const cacheBytes = data.cache_bytes_used ?? data.storage_bytes_used ?? data.storage_bytes;
+      const diskPercent = data.disk_percent ?? data.disk_used_percent ?? data.disk_usage_percent;
+      const diskValue = cacheBytes != null
+        ? formatBytes(Number(cacheBytes))
+        : diskPercent != null
+          ? `${diskPercent}%`
+          : "—";
+      // IMAP-302: uptime moment-formatted.
+      const uptimeStr = formatUptime(statusResult.data.uptime);
       setMetrics([
-        { label: "Uptime", value: formatUptime(statusResult.data.uptime) },
+        { label: "Uptime", value: uptimeStr },
         { label: "Memory", value: String(statusResult.data.memory_mb), unit: "MB" },
         { label: "CPU", value: String(statusResult.data.cpu_percent), unit: "%" },
-        { label: "Disk", value: diskValue == null ? "N/A" : String(diskValue), unit: diskUnit, tone: diskValue == null ? "neutral" : undefined },
+        { label: "Disk (cache)", value: diskValue, tone: diskValue === "—" ? "neutral" : undefined },
         { label: "Connections", value: String(statusResult.data.active_connections) },
       ]);
     } else {
@@ -226,6 +224,9 @@ export function DashboardPage() {
         <div className="flex flex-wrap items-center gap-3">
           <h1 className="text-2xl font-semibold">Dashboard</h1>
           <VersionInfo version={String(version.version ?? version.app_version ?? "")} />
+          <Button type="button" variant="secondary" size="sm" onClick={() => void load()}>
+            Refresh
+          </Button>
         </div>
         <p className="text-sm text-muted-foreground">
           Service health, resource metrics, and recent activity for the IMAP MCP service.
@@ -234,74 +235,105 @@ export function DashboardPage() {
 
       {error ? <p role="alert" className="text-sm text-destructive">{error}</p> : null}
 
-      <Card>
-        <CardHeader>
-          <h2 className="text-lg font-semibold">Resource Metrics</h2>
-        </CardHeader>
-        <CardContent>
-          <ResourceMetrics fetchUrl="/status" metrics={metrics} intervalMs={30000} />
-        </CardContent>
-      </Card>
-
+      {/* W28E-1837 / PS-WEBUI-STYLE-COMPONENTS section 7 (STD-F02): canonical
+          DashboardLayout — metric row + recent-activity table; the live
+          ResourceMetrics detail panel (IMAP-301/305) is kept in the service-
+          extension slot. CX-180: API/MCP/A2A status stays in the shell
+          top-right cluster (TopBarActions), never duplicated in the body. */}
       <DashboardLayout
-        healthWidgets={serviceWidgets.map((service) => (
-          <HealthWidget
-            key={service.name}
-            name={service.name}
-            status={service.status}
-            detail={service.detail}
-            url={service.url}
+        metricCards={metrics.map((metric) => (
+          <MetricCard
+            key={metric.label}
+            label={metric.label}
+            value={String(metric.value)}
+            unit={metric.unit}
           />
         ))}
         recentActivity={
-          <div className="space-y-3">
-            <h2 className="text-lg font-semibold">Recent activity</h2>
-            <div className="flex flex-wrap items-end gap-3">
-              <label className="min-w-[16rem] flex-1 space-y-1 text-sm">
-                <span>Search recent audit events</span>
-                <Input
-                  aria-label="Search recent audit events"
-                  value={auditQuery}
-                  onChange={(event) => setAuditQuery(event.target.value)}
-                  placeholder="Filter by actor, action, target, trace ID, request ID, or service"
-                />
-              </label>
-              <Button type="button" variant="secondary" onClick={() => void load()}>
-                Refresh
-              </Button>
-            </div>
-            {status ? <p role="status" className="text-sm text-foreground/80">{status}</p> : null}
-            {auditTableReady ? (
-              <div className="w-full overflow-x-auto">
-                <DataTable
-                  columns={auditColumns}
-                  rows={recentAuditRows}
-                  getRowId={auditRowId}
-                  emptyMessage="No recent activity recorded."
-                  page={auditPage}
-                  onPageChange={setAuditPage}
-                  pageSize={auditPageSize}
-                  onPageSizeChange={setAuditPageSize}
-                  columnPickerEnabled
-                  tableId="imap-dashboard-audit"
-                />
+          /* IMAP-307: body status widgets removed (shell top-right only).
+             IMAP-308: Recent Activity wrapped in max-h with sticky header.
+             IMAP-309: per-row audit click-through link + bulk-export. */
+          <Card>
+            <CardHeader>
+              <h2 className="text-lg font-semibold">Recent activity</h2>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <div className="flex flex-wrap items-end gap-3">
+                <label className="min-w-[16rem] flex-1 space-y-1 text-sm">
+                  <span>Search recent audit events</span>
+                  <Input
+                    aria-label="Search recent audit events"
+                    value={auditQuery}
+                    onChange={(event) => setAuditQuery(event.target.value)}
+                    placeholder="Filter by actor, action, target, trace ID, request ID, or service"
+                  />
+                </label>
+                <Button type="button" variant="secondary" onClick={() => void load()}>
+                  Refresh
+                </Button>
               </div>
-            ) : null}
-          </div>
+              {status ? <p role="status" className="text-sm text-foreground/80">{status}</p> : null}
+              {auditTableReady ? (
+                <div className="w-full overflow-x-auto max-h-[28rem]">
+                  <DataTable
+                    columns={auditColumnsWithLink}
+                    rows={recentAuditRows}
+                    getRowId={auditRowId}
+                    emptyMessage="No recent activity recorded."
+                    page={auditPage}
+                    onPageChange={setAuditPage}
+                    pageSize={auditPageSize}
+                    onPageSizeChange={setAuditPageSize}
+                    columnPickerEnabled
+                    tableId="imap-dashboard-audit"
+                    selectable
+                    bulkActions={[{ label: "Export selected", action: "export" }]}
+                    onBulkAction={(action, ids) => {
+                      if (action !== "export") return;
+                      const selected = recentAuditRows.filter((r) => ids.includes(auditRowId(r)));
+                      const blob = new Blob([JSON.stringify(selected, null, 2)], { type: "application/json" });
+                      const url = URL.createObjectURL(blob);
+                      const a = document.createElement("a");
+                      a.href = url;
+                      a.download = `audit-export-${Date.now()}.json`;
+                      a.click();
+                      URL.revokeObjectURL(url);
+                    }}
+                  />
+                </div>
+              ) : null}
+            </CardContent>
+          </Card>
         }
       >
+        {/* IMAP-305 / IMAP-301: live Resource Metrics detail panel (service-extension slot). */}
         <Card>
           <CardHeader>
-            <h2 className="text-lg font-semibold">Build Metadata</h2>
+            <h2 className="text-lg font-semibold">Resource Metrics</h2>
           </CardHeader>
           <CardContent>
-            <StructuredView title="Version" value={version} />
+            <ResourceMetrics fetchUrl="/status" metrics={metrics} intervalMs={30000} />
           </CardContent>
         </Card>
       </DashboardLayout>
     </div>
   );
 }
+
+// IMAP-309: extend auditColumns with a per-row click-through link to the full audit page.
+const auditLinkColumn: DataColumn<AuditEventRow> = {
+  id: "open",
+  header: "Open",
+  cell: (row) => (
+    <Link
+      to={`/diagnostics-audit?request_id=${encodeURIComponent(row.requestId || "")}`}
+      className="text-xs text-primary underline-offset-4 hover:underline"
+      title="Open in Audit & Log"
+    >
+      open ↗
+    </Link>
+  ),
+};
 
 const auditColumns: DataColumn<AuditEventRow>[] = [
   {
@@ -386,6 +418,9 @@ const auditColumns: DataColumn<AuditEventRow>[] = [
     sortValue: (row) => formatAuditDetails(row),
   },
 ];
+
+// IMAP-309: extended columns with the per-row Open → audit link.
+const auditColumnsWithLink: DataColumn<AuditEventRow>[] = [auditLinkColumn, ...auditColumns];
 
 const DEFAULT_AUDIT_VISIBLE_COLUMNS = [
   "who",

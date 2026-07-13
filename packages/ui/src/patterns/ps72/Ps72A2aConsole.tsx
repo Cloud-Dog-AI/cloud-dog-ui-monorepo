@@ -23,7 +23,8 @@
 import * as React from "react";
 import { Button } from "../../components/button/Button";
 import { Input } from "../../components/input/Input";
-import { Textarea } from "../../components/input/Textarea";
+import { JsonExplorer } from "../JsonExplorer";
+import { CodeEditor } from "../CodeEditor";
 import { Ps72ApiKeyField, Ps72HealthBadge, Ps72ResultMeta } from "./Ps72Parts";
 import {
   type Ps72ExecuteResult,
@@ -46,6 +47,17 @@ export type Ps72A2aConsoleProps = Readonly<{
   agentCard: Record<string, unknown> | null;
   /** Card-described skills/actions to populate the request template (§3.2). */
   skills: string[];
+  /** Optional per-skill request templates derived from the live agent card schema (§3.2). */
+  skillTemplates?: Readonly<Record<string, unknown>>;
+  /**
+   * PS-72 §11.3 extension point: optional externally-controlled initial action.
+   * Lets a service pre-select a skill from a domain panel (e.g. notification-agent
+   * CX-131 left-panel skill click) without forking the console. Reactive: when this
+   * changes the console selects that action and re-seeds the request editor.
+   */
+  initialAction?: string;
+  /** PS-72 §11.3 extension point: optional initial request payload paired with {@link initialAction}. */
+  initialRequest?: unknown;
   health: Ps72HealthState;
   hasBoundKey: boolean;
   boundLabel: string;
@@ -56,9 +68,43 @@ export type Ps72A2aConsoleProps = Readonly<{
 }>;
 
 function a2aTemplateForAction(action: string): Record<string, unknown> {
+  if (action === "mail_search") {
+    return {
+      profile_id: "operations",
+      mode: "cache",
+      query: "ALL",
+      filters: {},
+      limit: 10,
+    };
+  }
+  if (action === "mail_probe") {
+    return { profile_id: "operations", folder: "INBOX" };
+  }
+  if (action === "mail_get_message") {
+    return { profile_id: "operations", uid: "", folder: "INBOX" };
+  }
+  if (action === "index_list" || action === "collection_list" || action === "collections_list") {
+    return { profile: "default" };
+  }
+  if (action === "bulk_index") {
+    return {
+      profile: "default",
+      collection: "w28a_775",
+      documents: [
+        {
+          text: "PS-72 bulk index smoke document",
+          source: "a2a://ps72/bulk-index-smoke",
+          metadata: { lane: "W28A-775" },
+        },
+      ],
+    };
+  }
+  if (action === "profiles_list" || action === "backend_health_check" || action === "ingest_health") {
+    return {};
+  }
   if (action === "send_notification" || action === "notify/natural") {
     return {
-      command: "Send notification to gary@cloud-dog.net that the local PS-72 notification-agent A2A test completed.",
+      command: "Send notification to user@example.com that the local notification-agent A2A test completed.",
       channels: ["loopback_test"],
     };
   }
@@ -83,9 +129,32 @@ function a2aTemplateForAction(action: string): Record<string, unknown> {
   return {};
 }
 
+function nonEmptyTemplate(template: unknown): template is Record<string, unknown> {
+  return Boolean(
+    template &&
+    typeof template === "object" &&
+    !Array.isArray(template) &&
+    Object.keys(template).length > 0,
+  );
+}
+
+function requestTemplateForAction(action: string, templates: Readonly<Record<string, unknown>> | undefined): unknown {
+  if (templates && Object.prototype.hasOwnProperty.call(templates, action)) {
+    const template = templates[action];
+    if (nonEmptyTemplate(template)) return template;
+  }
+  return a2aTemplateForAction(action);
+}
+
 export function Ps72A2aConsole(props: Ps72A2aConsoleProps) {
-  const [action, setAction] = React.useState(props.skills[0] ?? "");
-  const [requestText, setRequestText] = React.useState(() => JSON.stringify(a2aTemplateForAction(props.skills[0] ?? ""), null, 2));
+  const [action, setAction] = React.useState(props.initialAction ?? props.skills[0] ?? "");
+  const [requestText, setRequestText] = React.useState(() =>
+    JSON.stringify(
+      props.initialRequest ?? requestTemplateForAction(props.initialAction ?? props.skills[0] ?? "", props.skillTemplates),
+      null,
+      2,
+    ),
+  );
   const [overrideKey, setOverrideKey] = React.useState("");
   const [running, setRunning] = React.useState(false);
   const [result, setResult] = React.useState<unknown | null>(null);
@@ -97,8 +166,23 @@ export function Ps72A2aConsole(props: Ps72A2aConsoleProps) {
     if (action && props.skills.includes(action)) return;
     const next = props.skills[0] ?? "";
     setAction(next);
-    setRequestText(JSON.stringify(a2aTemplateForAction(next), null, 2));
-  }, [action, props.skills]);
+    setRequestText(JSON.stringify(requestTemplateForAction(next, props.skillTemplates), null, 2));
+  }, [action, props.skills, props.skillTemplates]);
+
+  // §11.3 extension point: react to an externally-controlled initial action/request
+  // (e.g. a service domain panel selecting a skill) without forking the console.
+  React.useEffect(() => {
+    if (props.initialAction === undefined && props.initialRequest === undefined) return;
+    const next = props.initialAction ?? props.skills[0] ?? "";
+    setAction(next);
+    setRequestText(
+      JSON.stringify(props.initialRequest ?? requestTemplateForAction(next, props.skillTemplates), null, 2),
+    );
+    setResult(null);
+    setMeta(null);
+    setDenied(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [props.initialAction, props.initialRequest]);
 
   const pushEvent = (type: string, summary: string, payload: unknown) => {
     setEvents((prev) => [
@@ -109,7 +193,7 @@ export function Ps72A2aConsole(props: Ps72A2aConsoleProps) {
 
   const selectAction = (next: string) => {
     setAction(next);
-    setRequestText(JSON.stringify(a2aTemplateForAction(next), null, 2));
+    setRequestText(JSON.stringify(requestTemplateForAction(next, props.skillTemplates), null, 2));
     setResult(null);
     setMeta(null);
     setDenied(false);
@@ -132,10 +216,10 @@ export function Ps72A2aConsole(props: Ps72A2aConsoleProps) {
     try {
       const exec = await props.onSend(action, parsed, overrideKey);
       const durationMs = performance.now() - startedAt;
-      const status: Ps72LifecycleState = exec.denied ? "failed" : "succeeded";
-      const clientGenerated = !exec.correlationId || !exec.requestId;
+      const status: Ps72LifecycleState = exec.denied || exec.httpStatus >= 400 ? "failed" : "succeeded";
+      const clientGenerated = exec.clientGenerated ?? (!exec.correlationId || !exec.requestId);
       setResult(exec.body);
-      setDenied(exec.denied);
+      setDenied(exec.denied || exec.httpStatus >= 400);
       setMeta({
         correlationId: exec.correlationId && exec.correlationId.trim() ? exec.correlationId : `client-${crypto.randomUUID()}`,
         requestId: exec.requestId && exec.requestId.trim() ? exec.requestId : `client-${crypto.randomUUID()}`,
@@ -143,7 +227,7 @@ export function Ps72A2aConsole(props: Ps72A2aConsoleProps) {
         status,
         clientGenerated,
       });
-      pushEvent(exec.denied ? "error" : "result", exec.denied ? "Task denied" : "Task completed", exec.body);
+      pushEvent(status === "failed" ? "error" : "result", status === "failed" ? "Task failed" : "Task completed", exec.body);
     } catch (error) {
       const durationMs = performance.now() - startedAt;
       const message = error instanceof Error ? error.message : String(error);
@@ -190,7 +274,7 @@ export function Ps72A2aConsole(props: Ps72A2aConsoleProps) {
               <div className="mt-2 text-xs text-slate-500">
                 {props.skills.length} skills (<span data-testid="mcp-console-tool-count">{props.skills.length}</span>)
               </div>
-              <ul data-testid="mcp-console-tool-list" className="mt-2 max-h-36 space-y-1 overflow-y-auto text-xs text-slate-600" aria-label="Available A2A skills">
+              <ul data-testid="mcp-console-tool-list" className="mt-2 max-h-[28rem] space-y-1 overflow-y-auto text-xs text-slate-600" aria-label="Available A2A skills">
                 {props.skills.map((skill) => (
                   <li key={skill}>
                     <button
@@ -203,8 +287,15 @@ export function Ps72A2aConsole(props: Ps72A2aConsoleProps) {
                     </button>
                   </li>
                 ))}
-                {props.skills.length === 0 ? <li className="text-slate-400">No skills advertised.</li> : null}
+                {props.skills.length === 0 ? <li className="text-slate-600">No skills advertised.</li> : null}
               </ul>
+              {/* DM-AC-04: full agent card as structured JSON (collapsible), not raw text. */}
+              <details className="mt-3" data-testid="a2a-console-agent-card-json">
+                <summary className="cursor-pointer text-xs font-semibold uppercase tracking-wide text-slate-600">Agent card (JSON)</summary>
+                <div className="mt-2">
+                  <JsonExplorer data={props.agentCard} title="Agent card" viewMode="tree" />
+                </div>
+              </details>
               </>
             ) : (
               <p className="mt-2 text-xs text-rose-700">Agent card could not be resolved from the bridge.</p>
@@ -217,12 +308,12 @@ export function Ps72A2aConsole(props: Ps72A2aConsoleProps) {
               <li key={event.id} className="rounded border border-slate-200 bg-white p-2 text-xs">
                 <div className="flex items-center justify-between">
                   <span className="font-semibold text-slate-700">{event.type}</span>
-                  <span className="text-slate-400">{new Date(event.timestamp).toLocaleTimeString()}</span>
+                  <span className="text-slate-600">{new Date(event.timestamp).toLocaleTimeString()}</span>
                 </div>
                 <div className="text-slate-600">{event.summary}</div>
               </li>
             ))}
-            {events.length === 0 ? <li className="text-xs text-slate-400">No events yet.</li> : null}
+            {events.length === 0 ? <li className="text-xs text-slate-600">No events yet.</li> : null}
           </ul>
         </div>
 
@@ -260,15 +351,19 @@ export function Ps72A2aConsole(props: Ps72A2aConsoleProps) {
           <label data-testid="mcp-console-request-label" className="block text-xs font-semibold uppercase tracking-wide text-slate-600" htmlFor="mcp-console-request-editor">
             Request
           </label>
-          <Textarea
+          <div
             id="mcp-console-request-editor"
             data-testid="mcp-console-request-editor"
-            value={requestText}
-            onChange={(event) => setRequestText(event.target.value)}
-            className="font-mono text-xs"
-            aria-label="Request"
-            rows={6}
-          />
+          >
+            <CodeEditor
+              value={requestText}
+              onChange={setRequestText}
+              language="json"
+              ariaLabel="Request"
+              height={220}
+              lineNumbers={false}
+            />
+          </div>
 
           <Ps72ApiKeyField
             testIdPrefix="mcp-console"

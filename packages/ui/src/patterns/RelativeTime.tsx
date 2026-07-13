@@ -16,7 +16,7 @@
 
 import * as React from "react";
 import { cn } from "../utils/cn";
-import { formatRelative } from "../components/time/RelativeTimeUtils";
+import { formatRelativeTime } from "../utils/formatRelativeTime";
 
 export type RelativeTimeProps = Readonly<{
   timestamp: string | Date | number;
@@ -30,14 +30,14 @@ function toDate(value: string | Date | number): Date {
 
 export function RelativeTime(props: RelativeTimeProps) {
   const date = React.useMemo(() => toDate(props.timestamp), [props.timestamp]);
-  const [text, setText] = React.useState(() => formatRelative(date));
+  const [text, setText] = React.useState(() => formatRelativeTime(date));
 
   React.useEffect(() => {
     // Update immediately in case timestamp prop changed.
-    setText(formatRelative(date));
+    setText(formatRelativeTime(date));
 
     const id = window.setInterval(() => {
-      setText(formatRelative(date));
+      setText(formatRelativeTime(date));
     }, 60_000);
 
     return () => window.clearInterval(id);

@@ -14,8 +14,8 @@
 
 import * as React from "react";
 import { useNavigate } from "react-router-dom";
-import { Button, DataTable, HealthWidget, MetricCard, QuickActionBar, RelativeTime, Spinner, type DataColumn } from "@cloud-dog/ui";
-import { CopyrightFooter, DashboardLayout, VersionInfo } from "@cloud-dog/shell";
+import { Button, DataTable, Input, MetricCard, QuickActionBar, RelativeTime, Spinner, type DataColumn } from "@cloud-dog/ui";
+import { DashboardLayout, VersionInfo } from "@cloud-dog/shell";
 import { ProfileSelect } from "../components/ProfileSelect";
 import { useDbMcpState } from "../state/AppState";
 import type { AuditEvent, IndexStatusItem } from "../lib/types";
@@ -34,8 +34,7 @@ type ActivityRow = Readonly<{
 
 export function DashboardPage() {
   const navigate = useNavigate();
-  const { api, apiBaseUrl, currentProfile, profiles, refreshProfiles, appVersion } = useDbMcpState();
-  const [ping, setPing] = React.useState<Record<string, unknown> | null>(null);
+  const { api, currentProfile, profiles, refreshProfiles, appVersion } = useDbMcpState();
   const [jobs, setJobs] = React.useState<Record<string, unknown> | null>(null);
   const [indexStatus, setIndexStatus] = React.useState<IndexStatusItem | null>(null);
   const [activity, setActivity] = React.useState<AuditEvent[]>([]);
@@ -46,12 +45,11 @@ export function DashboardPage() {
     setLoading(true);
     setError(null);
     try {
-      const [pingResult, jobsResult, auditResult] = await Promise.all([
+      const [, jobsResult, auditResult] = await Promise.all([
         api.ping(),
         api.jobsHealth(),
         api.listAuditEvents(8),
       ]);
-      setPing(pingResult as Record<string, unknown>);
       setJobs(jobsResult as Record<string, unknown>);
       setActivity(auditResult);
       if (currentProfile) {
@@ -98,13 +96,17 @@ export function DashboardPage() {
     { id: "traceId", header: "Trace", cell: (item) => <span className="font-mono text-xs">{item.traceId}</span>, sortable: false },
   ];
 
-  const baseOrigin = (() => {
-    try {
-      return new URL(apiBaseUrl).origin;
-    } catch {
-      return "";
-    }
-  })();
+  // DM-D-08: search box atop the recent-activity list — filters the activity rows
+  // client-side across every displayed AU-3 field (event/outcome/actor/IP/trace).
+  const [activitySearch, setActivitySearch] = React.useState("");
+  const filteredRows = React.useMemo(() => {
+    const needle = activitySearch.trim().toLowerCase();
+    if (!needle) return rows;
+    return rows.filter((row) =>
+      [row.timestamp, row.eventType, row.outcome, row.actor, row.actorIp, row.severity, row.traceId]
+        .some((value) => String(value).toLowerCase().includes(needle)),
+    );
+  }, [rows, activitySearch]);
 
   const defaultNamespace = currentProfile?.namespaces[0] ?? "";
   const defaultEntity = currentProfile?.entities[0] ?? "";
@@ -126,14 +128,9 @@ export function DashboardPage() {
         </div>
       ) : null}
 
+      {/* CX-180: API/MCP/A2A status renders only once in the shell's top-right ServiceStatusBar/TopBar.
+          The former body-level healthWidgets cluster (HealthWidget API/MCP/A2A) was a duplicate and is removed. */}
       <DashboardLayout
-        healthWidgets={
-          <>
-            <HealthWidget name="API" status={ping ? "ok" : "unknown"} detail="/webapi/v1/ping" url={`${baseOrigin}/webapi/v1/ping`} />
-            <HealthWidget name="MCP" status={ping ? "ok" : "unknown"} detail="/webmcp/tools" />
-            <HealthWidget name="A2A" status="ok" detail="/weba2a/health" url={`${baseOrigin}/weba2a/health`} />
-          </>
-        }
         metricCards={
           <>
             <MetricCard label="Profiles" value={profiles.length} />
@@ -150,24 +147,33 @@ export function DashboardPage() {
               actions={[
                 { label: "Search", onClick: () => navigate("/search") },
                 { label: "Catalogue", onClick: () => navigate("/catalogue") },
-                { label: "Settings", onClick: () => navigate("/settings") },
+                { label: "Settings", onClick: () => navigate("/system/settings") },
               ]}
             />
           </div>
         }
         recentActivity={
-          <DataTable
-            columns={columns}
-            rows={rows}
-            emptyMessage="No audit events recorded yet."
-            getRowId={(row) => `${row.timestamp}|${row.eventType}|${row.actor}`}
-            selectable
-            tableId="db-mcp-dashboard-activity"
-          />
+          <div className="space-y-3">
+            <Input
+              type="search"
+              aria-label="Search recent activity"
+              placeholder="Search recent activity..."
+              value={activitySearch}
+              onChange={(event) => setActivitySearch(event.target.value)}
+              data-testid="dashboard-activity-search"
+            />
+            <DataTable
+              columns={columns}
+              rows={filteredRows}
+              emptyMessage={activitySearch ? "No activity matches the search." : "No audit events recorded yet."}
+              getRowId={(row) => `${row.timestamp}|${row.eventType}|${row.actor}`}
+              selectable
+              columnPickerEnabled
+              tableId="db-mcp-dashboard-activity"
+            />
+          </div>
         }
       />
-
-      <CopyrightFooter />
     </div>
   );
 }

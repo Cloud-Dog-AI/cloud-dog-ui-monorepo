@@ -1,19 +1,11 @@
 import * as React from 'react';
 import { DashboardLayout } from '@cloud-dog/shell';
-import { HealthWidget, MetricCard } from '@cloud-dog/ui';
+import { Button, MetricCard } from '@cloud-dog/ui';
 import { useExpertAgentState } from '../state/AppState';
 import type { QueueStatus, StatusPayload } from '../lib/api';
-import { LoadingNote, PageScaffold } from './shared';
+import { PageScaffold } from './shared';
 import { LogTablePanel } from './LogTablePanel';
 
-function formatUptime(seconds?: number): string {
-  if (typeof seconds !== 'number' || Number.isNaN(seconds)) return 'N/A';
-  const days = Math.floor(seconds / 86400);
-  const hours = Math.floor((seconds % 86400) / 3600);
-  const minutes = Math.floor((seconds % 3600) / 60);
-  if (days > 0) return `${days}d ${hours}h ${minutes}m`;
-  return `${hours}h ${minutes}m`;
-}
 
 export function DashboardPage() {
   const { api, latestFailure, captureFailure, clearFailure } = useExpertAgentState();
@@ -40,15 +32,21 @@ export function DashboardPage() {
 
   React.useEffect(() => { void refresh(); }, [refresh]);
 
+  // W28E-1837 / CX-180: API/MCP/A2A status lives in the shell ServiceStatusBar
+  // (App.tsx ShellAppChrome) — not duplicated in the body. HealthWidget rows
+  // and the healthWidgets prop are removed from DashboardLayout here.
+
+  if (loading) {
+    return (
+      <div className="flex min-h-[40vh] items-center gap-2 text-sm text-muted-foreground" role="status" aria-live="polite">
+        Loading dashboard...
+      </div>
+    );
+  }
+
   return (
-    <PageScaffold title="Dashboard" description="Operational landing view with live health, capacity, and recent activity." alert={latestFailure}>
-      <LoadingNote loading={loading} />
+    <PageScaffold title="Dashboard" description="Operational landing view with live capacity and recent activity." alert={latestFailure}>
       <DashboardLayout
-        healthWidgets={[
-          <HealthWidget key="api" name="API" status={status?.status === 'ok' || status?.status === 'healthy' || status?.status === 'up' ? 'ok' : status ? 'error' : 'unknown'} detail={`Uptime ${formatUptime(status?.uptime_seconds)}`} />,
-          <HealthWidget key="queue" name="Queue" status={(queue?.queue_depth ?? 0) > 0 ? 'warning' : 'ok'} detail={`Depth ${queue?.queue_depth ?? 0}`} />,
-          <HealthWidget key="sessions" name="Sessions" status={status ? 'ok' : 'unknown'} detail={`${status?.active_sessions ?? 0} active`} />,
-        ]}
         metricCards={[
           <MetricCard key="experts" label="Experts" value={status?.expert_count ?? 'N/A'} />,
           <MetricCard key="knowledge" label="Knowledge" value={status?.knowledge_item_count ?? 'N/A'} />,
@@ -81,7 +79,13 @@ export function DashboardPage() {
             ]}
           />
         )}
-      />
+      >
+        <div className="flex justify-end">
+          <Button type="button" variant="secondary" size="sm" onClick={() => void refresh()}>
+            Refresh
+          </Button>
+        </div>
+      </DashboardLayout>
     </PageScaffold>
   );
 }

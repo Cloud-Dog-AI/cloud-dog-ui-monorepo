@@ -145,7 +145,8 @@ export function SettingsPage() {
   const [settings, setSettings] = React.useState<MutableSettings>(DEFAULT_MUTABLE_SETTINGS);
   const [status, setStatus] = React.useState("Loading settings...");
   const [error, setError] = React.useState("");
-  const [importExportValue, setImportExportValue] = React.useState("");
+  // IMAP-520: start with a valid empty-object so the CodeEditor doesn't show a parse-error placeholder on fresh load.
+  const [importExportValue, setImportExportValue] = React.useState("{}");
   const [importExportLanguage, setImportExportLanguage] = React.useState<"json" | "yaml">("json");
   const [healthData, setHealthData] = React.useState<Record<string, unknown> | null>(null);
   const [adminConfig, setAdminConfig] = React.useState<Record<string, unknown> | null>(null);
@@ -164,7 +165,7 @@ export function SettingsPage() {
   // running services — what the coordinator feedback called out as missing.
   // Admin-only; non-admin viewers see an empty-state hint.
   React.useEffect(() => {
-    fetch("/webapi/v1/admin/config", { credentials: "include" })
+    fetch("/webapi/v1/admin/effective-config", { credentials: "include" })
       .then(async (response) => {
         if (response.status === 403) {
           setAdminConfigError("Admin role required to view the full runtime config tree.");
@@ -414,6 +415,7 @@ export function SettingsPage() {
               data={(adminConfig.build as Record<string, unknown>) ?? {}}
               defaultExpanded
               maxDepth={3}
+              viewMode="table"
             />
           </CardContent>
         </Card>
@@ -427,17 +429,18 @@ export function SettingsPage() {
           </p>
         </CardHeader>
         <CardContent className="space-y-3">
-          <JsonExplorer title="Service Information" data={serviceInfo} maxDepth={5} />
-          <JsonExplorer title="Storage and Backend" data={backendInfo} maxDepth={5} />
-          <JsonExplorer title="Logging" data={loggingInfo} maxDepth={5} />
-          <JsonExplorer title="Mutable IMAP Settings" data={maskSecrets(settings)} defaultExpanded maxDepth={5} />
-          <JsonExplorer title="Health" data={maskSecrets(healthData ?? { status: "loading" })} defaultExpanded maxDepth={5} />
+          <JsonExplorer title="Service Information" data={serviceInfo} maxDepth={5} viewMode="table" />
+          <JsonExplorer title="Storage and Backend" data={backendInfo} maxDepth={5} viewMode="table" />
+          <JsonExplorer title="Logging" data={loggingInfo} maxDepth={5} viewMode="table" />
+          <JsonExplorer title="Mutable IMAP Settings" data={maskSecrets(settings)} defaultExpanded maxDepth={5} viewMode="table" />
+          <JsonExplorer title="Health" data={maskSecrets(healthData ?? { status: "loading" })} defaultExpanded maxDepth={5} viewMode="table" />
         </CardContent>
       </Card>
 
       {/* W28C-434E2 Pass 2: full runtime config tree (os.environ + env-file +
-          config.yaml + defaults.yaml) sourced from /api/admin/config. Secrets
-          are redacted server-side. Admin-only. */}
+          config.yaml + defaults.yaml) sourced from /webapi/v1/admin/effective-config
+          (W28E-1863 fix-wave-b: was /webapi/v1/admin/config which 404'd — the API
+          serves /admin/effective-config). Secrets redacted server-side. Admin-only. */}
       {adminConfigError ? (
         <Card>
           <CardHeader>
@@ -462,18 +465,21 @@ export function SettingsPage() {
               data={(adminConfig.environ as Record<string, unknown>) ?? {}}
               defaultExpanded={false}
               maxDepth={3}
+              viewMode="table"
             />
             <JsonExplorer
               title={`Env files (${((adminConfig.env_files as unknown[]) ?? []).length})`}
               data={{ files: adminConfig.env_files ?? [] }}
               defaultExpanded={false}
               maxDepth={3}
+              viewMode="table"
             />
             <JsonExplorer
               title="config.yaml + defaults.yaml (merged Pydantic snapshot)"
               data={(adminConfig.config as Record<string, unknown>) ?? {}}
               defaultExpanded={false}
               maxDepth={7}
+              viewMode="table"
             />
           </CardContent>
         </Card>

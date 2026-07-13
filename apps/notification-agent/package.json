@@ -19,11 +19,13 @@
     "react-router-dom": "^6.26.2",
     "@cloud-dog/shell": "^0.2.0",
     "@cloud-dog/ui": "^0.3.0",
+    "@cloud-dog/idam": "^0.2.0",
     "@cloud-dog/auth": "^0.2.0",
     "@cloud-dog/api-client": "^0.1.0",
     "@cloud-dog/config": "^0.1.0",
     "@cloud-dog/tokens": "^0.1.0",
     "@cloud-dog/testing": "^0.1.0",
+    "lucide-react": "^1.8.0",
     "zod": "^3.23.8"
   },
   "devDependencies": {

@@ -139,8 +139,18 @@ function parseLogObjects(payload: unknown): Array<Record<string, unknown>> {
   });
 }
 
+// W28A-890a is the "native E2E" suite for a fully-instrumented LOCAL sql-agent instance:
+// 11 of its 12 serial tests drive real end-to-end LLM query / context-rebuild / i18n flows
+// that each take 300-720s against qwen3:14b, and it asserts rich `/api/v1/status` service
+// metrics. Run end-to-end it far exceeds the preprod smoke budget (the shared preprod driver
+// caps a run at 2700s) and depends on a single-tenant LLM. When pointed at a remote preprod
+// target it is therefore not a viable contract; the deployed-service coverage for these
+// surfaces is provided by preprod-deploy-smoke, smoke.spec, and the PS-72 conformance suites.
+const NATIVE_REMOTE_TARGET = /^https?:\/\/(?!(localhost|127\.0\.0\.1))/i.test(process.env.E2E_BASE_URL ?? '');
+
 test.describe('W28A-890a sql-agent native E2E', () => {
   test.describe.configure({ mode: 'serial' });
+  test.skip(NATIVE_REMOTE_TARGET, 'native local-instance LLM suite exceeds the preprod smoke budget; deployed coverage via preprod-deploy-smoke + smoke + PS-72 conformance');
 
   test.beforeEach(async ({ page }) => {
     await login(page);

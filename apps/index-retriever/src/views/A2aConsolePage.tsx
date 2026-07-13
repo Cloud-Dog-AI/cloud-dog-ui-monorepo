@@ -16,65 +16,87 @@
 
 import * as React from "react";
 import { useConfig } from "@cloud-dog/config";
-import { A2aConsole, Badge, Card, CardContent, CardHeader, JsonBlock } from "@cloud-dog/ui";
+import { Ps72A2aConsole } from "@cloud-dog/ui";
+import type { Ps72HealthState } from "@cloud-dog/ui";
 import { useIndexRetrieverState } from "../state/AppState";
-import type { JsonRecord } from "../lib/types";
+import { extractA2aSkills, maskBoundKey, ps72A2aTaskCall, resolveAppUrl } from "../lib/ps72Console";
 
 type RuntimeConfig = Readonly<{
-  A2A_BASE_URL?: string;
   API_BASE_URL: string;
+  AUTH_MODE?: "api_key" | "cookie" | "oidc";
+  A2A_BASE_URL?: string;
 }>;
 
 export function A2aConsolePage() {
   const cfg = useConfig<RuntimeConfig>();
   const app = useIndexRetrieverState();
-  const [lastResponse, setLastResponse] = React.useState<unknown>(null);
+  const { api, apiKey, captureFailure, recordActivity } = app;
   const [status, setStatus] = React.useState<string>("");
   const [error, setError] = React.useState<string | null>(null);
-
-  const endpointUrl = `${window.location.origin}/a2a`;
-  const agentCardUrl = React.useMemo(() => {
-    return new URL("/a2a/.well-known/agent.json", window.location.origin).toString();
-  }, []);
+  const [health, setHealth] = React.useState<Ps72HealthState>("unknown");
   const [agentCard, setAgentCard] = React.useState<Record<string, unknown> | null>(null);
 
-  React.useEffect(() => {
-    fetch(agentCardUrl).then((r) => r.json()).then((c) => setAgentCard(c as Record<string, unknown>)).catch(() => {});
-  }, [agentCardUrl]);
+  const endpointUrl = cfg.A2A_BASE_URL?.trim() || `${window.location.origin}/a2a`;
+  const agentCardUrl = React.useMemo(() => {
+    return resolveAppUrl("/a2a/.well-known/agent.json", window.location.origin);
+  }, []);
 
-  const onSend = async (topic: string, payload: unknown) => {
+  React.useEffect(() => {
+    let mounted = true;
+    const headers = new Headers({ accept: "application/json" });
+    const token = apiKey.trim();
+    if (token) headers.set("x-api-key", token);
+
+    const load = async () => {
+      setError(null);
+      try {
+        const [cardResponse] = await Promise.all([
+          fetch(agentCardUrl, { credentials: "include", headers }),
+          api.getA2aHealth(),
+        ]);
+        const card = (await cardResponse.json()) as Record<string, unknown>;
+        if (!mounted) return;
+        setAgentCard(cardResponse.ok ? card : null);
+        setHealth(cardResponse.ok ? "healthy" : "degraded");
+        setStatus(cardResponse.ok ? "Loaded A2A agent card" : "A2A agent card unavailable");
+      } catch (loadError) {
+        if (!mounted) return;
+        const message = captureFailure(loadError);
+        setError(message);
+        setHealth("unhealthy");
+      }
+    };
+
+    void load();
+    return () => {
+      mounted = false;
+    };
+  }, [agentCardUrl, api, apiKey, captureFailure]);
+
+  const onSend = async (action: string, payload: unknown, overrideKey: string) => {
     setError(null);
     setStatus("");
 
     try {
-      const normalized = topic.trim().toLowerCase();
-      let response: unknown;
-      if (normalized === "health") {
-        response = await app.api.getA2aHealth();
-      } else if (normalized === "events") {
-        response = await app.api.getA2aEvents();
-      } else if (normalized === "root") {
-        response = await app.api.getA2aRoot();
-      } else {
-        response = {
-          status: "unsupported_topic",
-          supported_topics: ["root", "health", "events"],
-          requested_topic: topic,
-          payload,
-        } satisfies JsonRecord;
-      }
-
-      setLastResponse(response);
-      setStatus(`A2A topic ${topic} executed`);
-      app.recordActivity(`a2a.${normalized || "unknown"}`, "ok");
-      return response;
+      const result = await ps72A2aTaskCall({
+        apiBaseUrl: cfg.API_BASE_URL,
+        action,
+        payload,
+        boundApiKey: apiKey,
+        overrideKey,
+      });
+      setStatus(`Submitted A2A action ${action}`);
+      recordActivity(`a2a.${action || "unknown"}`, result.denied ? "error" : "ok", result.denied ? String(result.httpStatus) : undefined);
+      return result;
     } catch (runError) {
-      const message = app.captureFailure(runError);
+      const message = captureFailure(runError);
       setError(message);
-      app.recordActivity(`a2a.${topic || "unknown"}`, "error", message);
+      recordActivity(`a2a.${action || "unknown"}`, "error", message);
       throw runError;
     }
   };
+  const hasBoundKey = cfg.AUTH_MODE === "api_key" ? Boolean(apiKey.trim()) : true;
+  const skills = extractA2aSkills(agentCard);
 
   return (
     <div className="space-y-6">
@@ -93,46 +115,17 @@ export function A2aConsolePage() {
         </p>
       ) : null}
 
-      {/* PS-72 MW4: Auth display */}
-      <Card>
-        <CardHeader>
-          <div className="flex items-center gap-2">
-            <h2 className="text-lg font-semibold">Authentication</h2>
-            <Badge variant="default" className="bg-emerald-600 text-white border-emerald-700">session</Badge>
-          </div>
-        </CardHeader>
-        <CardContent>
-          <p className="text-sm text-muted-foreground">A2A endpoint: <code className="text-xs">{endpointUrl}</code></p>
-        </CardContent>
-      </Card>
-
-      {/* PS-72 MW3: Agent card */}
-      {agentCard ? (
-        <Card>
-          <CardHeader><h2 className="text-lg font-semibold">Agent Card</h2></CardHeader>
-          <CardContent>
-            <JsonBlock title="Agent Card" value={agentCard} defaultCollapsed={false} />
-          </CardContent>
-        </Card>
-      ) : null}
-
-      <Card>
-        <CardHeader>
-          <h2 className="text-lg font-semibold">Shared A2A console</h2>
-        </CardHeader>
-        <CardContent>
-          <A2aConsole endpointUrl={endpointUrl} onSend={onSend} />
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader>
-          <h2 className="text-lg font-semibold">Last A2A response</h2>
-        </CardHeader>
-        <CardContent>
-          <JsonBlock title="response" value={lastResponse ?? {}} />
-        </CardContent>
-      </Card>
+      <Ps72A2aConsole
+        endpointUrl={endpointUrl}
+        agentCard={agentCard}
+        skills={skills}
+        health={health}
+        hasBoundKey={hasBoundKey}
+        boundLabel={maskBoundKey(apiKey)}
+        docsHref="/api-docs#a2a"
+        jobsHref="/system/jobs"
+        onSend={onSend}
+      />
     </div>
   );
 }

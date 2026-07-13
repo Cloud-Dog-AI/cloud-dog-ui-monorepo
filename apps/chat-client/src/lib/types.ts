@@ -17,8 +17,22 @@
 export type SessionSummary = Readonly<{
   id: string;
   created_at: string;
+  // CL-11 (W28E-1876): derived session time-to-live from the backend, so the
+  // sessions listing can show an "Expires" column and remaining TTL.
+  expires_at?: string;
+  ttl_seconds?: number;
   metadata?: Record<string, unknown>;
   log_path?: string;
+}>;
+
+// CL-30 (W28E-1876): result of the /chat "Test model" action (POST /llm/test).
+export type LlmTestResult = Readonly<{
+  ok: boolean;
+  model: string;
+  provider: string;
+  latency_ms: number;
+  sample?: string;
+  error?: string;
 }>;
 
 export type TranscriptEvent = Readonly<{
@@ -116,6 +130,15 @@ export type FileIntakeSettings = Readonly<{
   artifact_rendering_enabled?: boolean;
 }>;
 
+export type AgentStrategyName =
+  | "simple"
+  | "react"
+  | "codeact"
+  | "subagent_router"
+  | "rlm"
+  | "reflexion"
+  | "longworkflow";
+
 export type ChatProfileRecord = Readonly<{
   id: number;
   profile_id: string;
@@ -160,6 +183,9 @@ export type VersionInfoRecord = Readonly<{
   version: string;
   environment: string;
   server_id: string;
+  // W28E-1863 fix-wave-d (WSC-014): container build provenance for the About page.
+  source_commit?: string;
+  build_date?: string;
 }>;
 
 export type ResourceStatusRecord = Readonly<{

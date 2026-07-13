@@ -12,7 +12,7 @@
 // @cloud-dog/app-chat-client — API documentation (PS-74 DW1–DW7).
 
 import * as React from "react";
-import { useConfig } from "@cloud-dog/config";
+import { useConfig } from "../lib/runtime-config";
 import {
   ApiDocsPanel,
   Card,
@@ -34,7 +34,6 @@ type RuntimeConfig = Readonly<{
   API_BASE_URL: string;
   MCP_BASE_URL: string;
   A2A_EVENTS_URL: string;
-  API_KEY_HEADER?: string;
 }>;
 
 type McpToolRow = Readonly<{
@@ -78,7 +77,7 @@ function resolveA2aHttpBaseForAgentCard(eventsUrl: string): string {
 export function DocsPage() {
   const cfg = useConfig<RuntimeConfig>();
   const { apiKey, apiKeyHeader } = useAppState();
-  const headerName = apiKeyHeader || cfg.API_KEY_HEADER || "X-API-Key";
+  const headerName = apiKeyHeader || "X-API-Key";
 
   const [tab, setTab] = React.useState("api");
   const [docSearch, setDocSearch] = React.useState("");

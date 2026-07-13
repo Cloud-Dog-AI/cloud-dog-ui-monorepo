@@ -133,8 +133,25 @@ export type ExpertRecord = Readonly<{
   temperature?: number | null;
   top_k?: number | null;
   max_tokens?: number | null;
+  num_ctx?: number | null;
+  num_predict?: number | null;
+  think?: boolean | null;
+  llm_params?: Record<string, unknown> | null;
   created_at?: string | null;
   updated_at?: string | null;
+}>;
+
+// EA-87 (W28E-1863 fix-wave-c): the prompt-generation endpoints accept richer
+// context than the UI previously sent. The backend GeneratePromptRequest /
+// GenerateTestCasesRequest models accept context_type, expected_outcomes and
+// available_tools; expert_id is still passed through for the workbench's
+// per-expert context. This type carries the channel + knowledge + outcomes the
+// workbench now wires into the request payload.
+export type PromptGenerateContext = Readonly<{
+  expertId?: number;
+  contextType?: string;
+  expectedOutcomes?: string;
+  availableTools?: string[];
 }>;
 
 export type ProviderRecord = Readonly<{
@@ -522,7 +539,7 @@ export type ExpertAgentApi = Readonly<{
   exportChannelHistory: (channelId: number) => Promise<{ channel_id: number; format: string; exported_count: number; history: { messages?: Array<Record<string, unknown>>; count?: number } }>;
   sendChannelMessage: (channelId: number, payload: { message: string; user_id: number; session_id?: number | null; async_mode?: boolean; max_tokens?: number }) => Promise<ChannelChatResult>;
   listExperts: () => Promise<ExpertRecord[]>;
-  createExpert: (payload: { name: string; title: string; description: string; prompt_template?: string; llm_provider?: string; llm_model?: string; temperature?: number; top_k?: number; max_tokens?: number; enabled?: boolean }) => Promise<ExpertRecord>;
+  createExpert: (payload: { name: string; title: string; description: string; prompt_template?: string; llm_provider?: string; llm_model?: string; temperature?: number; top_k?: number; max_tokens?: number; num_ctx?: number; num_predict?: number; think?: boolean; llm_params?: Record<string, unknown>; enabled?: boolean }) => Promise<ExpertRecord>;
   updateExpert: (expertId: number, payload: Partial<ExpertRecord> & { prompt_template?: string }) => Promise<ExpertRecord>;
   deleteExpert: (expertId: number) => Promise<void>;
   listJobs: () => Promise<JobRecord[]>;
@@ -574,8 +591,8 @@ export type ExpertAgentApi = Readonly<{
   createPromptTemplate: (payload: PromptTemplateUpsert) => Promise<PromptTemplateRecord>;
   updatePromptTemplate: (promptId: number, payload: { content: string }) => Promise<PromptTemplateRecord>;
   deletePromptTemplate: (promptId: number) => Promise<void>;
-  generatePrompt: (prompt: string, expertId?: number) => Promise<PromptGenerateResult>;
-  generatePromptTestCases: (prompt: string, expertId?: number) => Promise<PromptTestCase[]>;
+  generatePrompt: (prompt: string, context?: PromptGenerateContext) => Promise<PromptGenerateResult>;
+  generatePromptTestCases: (prompt: string, context?: PromptGenerateContext) => Promise<PromptTestCase[]>;
   validatePrompt: (prompt: string) => Promise<PromptValidation>;
   listPromptExperts: (promptId: number) => Promise<Array<{ assignment_id: number; expert_id: number; expert_name?: string; expert_title?: string; is_active?: boolean }>>;
   assignPromptExpert: (promptId: number, expertId: number) => Promise<{ assignment_id: number; expert_id: number; prompt_id: number }>;
@@ -854,7 +871,9 @@ export function createExpertAgentApi(baseUrl: string): ExpertAgentApi {
     removeExpertSubExpert: async (expertId, subExpertId) => { await requestJson(baseUrl, `/experts/${expertId}/sub-experts/${subExpertId}`, { method: 'DELETE' }); },
     batchSetExpertSubExperts: (expertId, subExpertIds) => requestJson<{ sub_experts: SubExpertBindingRecord[]; count: number }>(baseUrl, `/experts/${expertId}/sub-experts/batch`, { method: 'PUT', body: { sub_expert_ids: subExpertIds } }),
     testExpertQuery: async (expertId, payload) => {
-      const result = await requestJson<unknown>(baseUrl, `/experts/${expertId}/execute`, { method: 'POST', body: { input_text: payload.query, context: payload.user_id ? { user_id: payload.user_id } : undefined } });
+      // EXPWEB-029: the Test Query popup submits the execution as an async job so it can
+      // render job/progress and poll GET /jobs/{id} for the final response.
+      const result = await requestJson<unknown>(baseUrl, `/experts/${expertId}/execute`, { method: 'POST', body: { input_text: payload.query, async_mode: true, context: payload.user_id ? { user_id: payload.user_id } : undefined } });
       return (result && typeof result === 'object') ? (result as Record<string, unknown>) : { result };
     },
     listProviders: async () => asArray<ProviderRecord>(await requestJson<unknown>(baseUrl, '/providers')),
@@ -876,24 +895,35 @@ export function createExpertAgentApi(baseUrl: string): ExpertAgentApi {
     createPromptTemplate: (payload) => requestJson<PromptTemplateRecord>(baseUrl, '/prompts', { method: 'POST', body: payload }),
     updatePromptTemplate: (promptId, payload) => requestJson<PromptTemplateRecord>(baseUrl, `/prompts/${promptId}`, { method: 'PUT', body: payload }),
     deletePromptTemplate: async (promptId) => { await requestJson(baseUrl, `/prompts/${promptId}`, { method: 'DELETE' }); },
-    generatePrompt: async (prompt, expertId) => {
+    generatePrompt: async (prompt, context) => {
+      // EA-87: forward channel context (context_type), outcomes
+      // (expected_outcomes) and knowledge/tools (available_tools) — all
+      // supported by the backend GeneratePromptRequest — alongside the
+      // per-expert context. Omitted fields stay undefined so the payload is
+      // unchanged when no extra context is selected.
       return requestJson<PromptGenerateResult>(baseUrl, '/prompts/generate', {
         method: 'POST',
         body: {
           title: 'Prompt workbench',
           details: prompt,
-          expert_id: expertId,
+          expert_id: context?.expertId,
+          context_type: context?.contextType || undefined,
+          expected_outcomes: context?.expectedOutcomes || undefined,
+          available_tools: context?.availableTools && context.availableTools.length > 0 ? context.availableTools : undefined,
         },
       });
     },
-    generatePromptTestCases: async (prompt, expertId) => {
+    generatePromptTestCases: async (prompt, context) => {
       const payload = await requestJson<unknown>(baseUrl, '/prompts/test-cases', {
         method: 'POST',
         body: {
           title: 'Prompt workbench',
           details: prompt,
           prompt,
-          expert_id: expertId,
+          expert_id: context?.expertId,
+          // EA-87: the test-case generator accepts the same channel + outcomes context.
+          context_type: context?.contextType || undefined,
+          expected_outcomes: context?.expectedOutcomes || undefined,
         },
       });
       if (payload && typeof payload === 'object') {

@@ -16,6 +16,16 @@
 
 export { CrudPage } from "./CrudPage";
 export type { CrudColumn, CrudBulkAction, CrudPageProps } from "./CrudPage";
+export {
+  CRUD_ACTION_LABELS,
+  CRUD_TABLE_MESSAGES,
+  CRUD_EXTENSION_SLOT_TEST_ID,
+  crudDialogTitle,
+  crudRequiredMessage,
+  crudDeleteConfirmation,
+  singularizeEntityName,
+} from "./CrudVocabulary";
+export type { CrudActionMode } from "./CrudVocabulary";
 
 export { StatusCard } from "./StatusCard";
 export type { StatusCardProps, StatusTone } from "./StatusCard";
@@ -41,11 +51,17 @@ export type { JsonBlockProps } from "./JsonBlock";
 export { JsonExplorer } from "./JsonExplorer";
 export type { JsonExplorerProps, JsonExplorerSource, JsonExplorerSourceMap } from "./JsonExplorer";
 
+export { WorkedExamplePopup } from "./WorkedExamplePopup";
+export type { WorkedExampleProps } from "./WorkedExamplePopup";
+
 export { StructuredView } from "./StructuredView";
 export type { StructuredViewProps } from "./StructuredView";
 
 export { EntityForm } from "./EntityForm";
 export type { EntityFormProps, EntityFieldDef, EntityFormMode } from "./EntityForm";
+
+export { MetadataEditor } from "./MetadataEditor";
+export type { MetadataEditorProps, MetadataFieldSpec, MetadataFieldType } from "./MetadataEditor";
 
 export { EntityDialog } from "./EntityDialog";
 export type {
@@ -65,6 +81,18 @@ export type {
 
 export { RelatedItemsPanel } from "./RelatedItemsPanel";
 export type { RelatedItemsPanelProps, RelatedItem } from "./RelatedItemsPanel";
+
+export { SessionsHistoryPanel, sessionsHistoryStatusTone } from "./SessionsHistoryPanel";
+export type {
+  SessionsHistoryPanelProps,
+  SessionsHistoryRow,
+  SessionsHistoryAction,
+  SessionsHistoryConfirmConfig,
+  SessionsHistoryDetailItem,
+  SessionsHistoryTimestamp,
+  SessionsHistoryVariant,
+  SessionsHistoryStatusTone,
+} from "./SessionsHistoryPanel";
 
 export { RelationshipGraph } from "./RelationshipGraph";
 export type {
@@ -93,7 +121,7 @@ export { A2aConsole } from "./A2aConsole";
 export type { A2aConsoleProps } from "./A2aConsole";
 
 export { SettingsPanel } from "./SettingsPanel";
-export type { SettingsPanelProps, SettingGroupDef } from "./SettingsPanel";
+export type { SettingsPanelProps, SettingsPanelServerTab, SettingsPanelStatus, SettingGroupDef } from "./SettingsPanel";
 
 export { SettingGroup } from "./SettingGroup";
 export type { SettingGroupProps } from "./SettingGroup";
@@ -109,6 +137,15 @@ export type { LogStreamProps, LogEntry } from "./LogStream";
 
 export { ResourceMetrics } from "./ResourceMetrics";
 export type { ResourceMetricsProps, MetricItem } from "./ResourceMetrics";
+
+// PS-WEBUI-STYLE-COMPONENTS §10 / W28E-1851 (STD-F16): canonical diagnostics /
+// health / resource-metrics panel composition.
+export { DiagnosticsHealthPanel } from "./DiagnosticsHealthPanel";
+export type {
+  DiagnosticsHealthPanelProps,
+  DiagnosticsHealthItem,
+  DiagnosticsMetricCardItem,
+} from "./DiagnosticsHealthPanel";
 
 export { RelativeTime } from "./RelativeTime";
 export type { RelativeTimeProps } from "./RelativeTime";
@@ -132,6 +169,7 @@ export type {
   ApiDocsMode,
   McpToolDoc,
   A2aSkillDoc,
+  ApiDocsExtraTab,
 } from "./ApiDocsPanel";
 
 export { AdminUsersPage } from "./AdminUsersPage";
@@ -170,6 +208,22 @@ export type { CodeViewerProps } from "./CodeViewer";
 export { DiffViewer } from "./DiffViewer";
 export type { DiffViewerProps } from "./DiffViewer";
 
+export { SelectionCriteriaPanel, loadPersistedSelection } from "./SelectionCriteriaPanel";
+export type {
+  SelectionCriteriaPanelProps,
+  SelectionCriteria,
+  SelectionCriteriaField,
+  SelectionCriteriaSources,
+  SelectionOption,
+  ProfileOption,
+  WorkspaceOption,
+  RefOption,
+  PathOption,
+  AuthorOption,
+  StashOption,
+  RefType,
+} from "./SelectionCriteriaPanel";
+
 export { SearchPanel } from "./SearchPanel";
 export type {
   SearchPanelProps,
@@ -178,6 +232,21 @@ export type {
   SearchFilterValue,
   SearchFilterValues,
 } from "./SearchPanel";
+
+// W28B-319: prompt-engineering (AGENTIC D5) presentation components.
+export { PromptEditor } from "./PromptEditor";
+export type { PromptEditorProps, PromptTemplateValues } from "./PromptEditor";
+
+export { PromptVersionPicker } from "./PromptVersionPicker";
+export type { PromptVersionPickerProps, PromptVersion } from "./PromptVersionPicker";
+
+export { PromptTestRunner } from "./PromptTestRunner";
+export type {
+  PromptTestRunnerProps,
+  PromptTestCase,
+  PromptTestResult,
+  PromptTestStatus,
+} from "./PromptTestRunner";
 
 // PS-72 v2 MCP/A2A console components (promoted from W28A-774 under W28A-773).
 export { Ps72McpConsole } from "./ps72/Ps72McpConsole";

@@ -265,7 +265,7 @@ export function AppStateProvider(props: { children: React.ReactNode }) {
     signIn,
     signOut,
     defaultProfile: cfg.DEFAULT_PROFILE ?? "remote_cloud_dog",
-    remoteRepoUrl: cfg.REMOTE_REPO_URL ?? "https://example.com/org/example-project.git",
+    remoteRepoUrl: cfg.REMOTE_REPO_URL ?? "https://git.example.com/your-org/your-repo.git",
     workspaceId,
     setWorkspaceId,
     operationHistory,

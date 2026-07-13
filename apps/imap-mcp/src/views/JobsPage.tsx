@@ -19,6 +19,8 @@ import {
   MetricCard,
   RelativeTime,
   Select,
+  createDataTableActionColumn,
+  formatSeconds,
   type BulkAction,
   type DataColumn,
   type EntityFieldDef,
@@ -68,16 +70,12 @@ function statusPresentation(status: string): { variant: "default" | "secondary" 
   return { variant: "secondary" };
 }
 
-// JW2 #9 — Duration in relative format, NEVER raw seconds
+// JW2 #9 / CX-170 — Duration via shared moment-format helper, NEVER raw seconds.
 function formatDuration(job: JobRecord): string {
   const start = Date.parse(job.startedAtUtc || job.createdAtUtc);
   const end = Date.parse(job.finishedAtUtc || job.updatedAtUtc);
   if (!Number.isFinite(start) || !Number.isFinite(end) || end < start) return "—";
-  const totalSeconds = Math.round((end - start) / 1000);
-  if (totalSeconds < 60) return `${totalSeconds}s`;
-  const m = Math.floor(totalSeconds / 60);
-  const s = totalSeconds % 60;
-  return s > 0 ? `${m}m ${s}s` : `${m}m`;
+  return formatSeconds(Math.round((end - start) / 1000));
 }
 
 export function JobsPage() {
@@ -186,6 +184,29 @@ export function JobsPage() {
 
   const totalPages = Math.max(1, Math.ceil(filteredJobs.length / Math.max(1, pageSize)));
 
+  // IMAP-501: per-row job action helpers.
+  const cancelJob = React.useCallback(async (jobId: string) => {
+    if (!window.confirm(`Cancel job ${jobId}?`)) return;
+    const r = await api.cancelJob(jobId);
+    if (!r.ok) { setError(r.errorMessage || "Cancel failed."); return; }
+    setStatus(`Cancelled job ${jobId}.`);
+    await load();
+  }, [api, load]);
+  const retryJob = React.useCallback(async (jobId: string) => {
+    if (!window.confirm(`Retry job ${jobId}?`)) return;
+    const r = await api.retryJob(jobId);
+    if (!r.ok) { setError(r.errorMessage || "Retry failed."); return; }
+    setStatus(`Retried job ${jobId}.`);
+    await load();
+  }, [api, load]);
+  const archiveJob = React.useCallback(async (jobId: string) => {
+    if (!window.confirm(`Archive job ${jobId}?`)) return;
+    const r = await api.archiveJob(jobId);
+    if (!r.ok) { setError(r.errorMessage || "Archive failed."); return; }
+    setStatus(`Archived job ${jobId}.`);
+    await load();
+  }, [api, load]);
+
   const performAction = React.useCallback(async (action: ConfirmAction["action"], jobIds: string[]) => {
     setBusy(true); setError(""); setStatus("");
     try {
@@ -203,7 +224,7 @@ export function JobsPage() {
 
   // JW5 — Bulk actions
   const bulkActions = React.useMemo<BulkAction[]>(() => {
-    const actions: BulkAction[] = [];
+    const actions: BulkAction[] = [{ label: "Export", action: "export" }];
     if (canWriteJobs) {
       actions.push({ label: "Cancel Selected", action: "cancel" });
       actions.push({ label: "Retry Selected", action: "retry" });
@@ -216,7 +237,19 @@ export function JobsPage() {
   const columns = React.useMemo<DataColumn<JobRecord>[]>(() => [
     {
       id: "job_id", header: "Job ID", sortable: true, sortValue: (r) => r.jobId,
-      cell: (r) => <Button type="button" variant="link" className="!transition-none max-w-[10rem] truncate font-mono text-xs" title={r.jobId} onClick={() => void openJobDetail(r.jobId, "overview", r)}>{r.jobId.slice(0, 12)}</Button>,
+      cell: (r) => (
+        <Link
+          to={`/jobs?job_id=${encodeURIComponent(r.jobId)}`}
+          className="block max-w-[10rem] truncate font-mono text-xs text-primary underline-offset-4 hover:underline"
+          title={r.jobId}
+          onClick={(event) => {
+            event.preventDefault();
+            void openJobDetail(r.jobId, "overview", r);
+          }}
+        >
+          {r.jobId.slice(0, 12)}
+        </Link>
+      ),
     },
     { id: "job_type", header: "Type", sortable: true, sortValue: (r) => r.jobType, cell: (r) => r.jobType || "—" },
     {
@@ -252,7 +285,27 @@ export function JobsPage() {
     // Project-specific columns after mandatory 12
     { id: "profile_id", header: "Profile ID", sortable: true, sortValue: (r) => r.profileId || "", cell: (r) => r.profileId || "—" },
     { id: "mailbox", header: "Mailbox", sortable: true, sortValue: (r) => r.mailbox || "", cell: (r) => r.mailbox || "—" },
-  ], [openJobDetail]);
+    {
+      ...createDataTableActionColumn<JobRecord>((r) => {
+        const status = String(r.status || "").toLowerCase();
+        const isTerminal = ["succeeded", "failed", "cancelled", "timeout", "timed_out", "dead_lettered", "ttl_expired", "archived"].includes(status);
+        const actions = [
+          { id: "view", label: "View", onClick: () => void openJobDetail(r.jobId, "overview", r) },
+          { id: "audit", label: "Audit", href: () => `/diagnostics-audit?job_id=${encodeURIComponent(r.jobId)}` },
+        ];
+        if (!isTerminal) {
+          actions.push({ id: "cancel", label: "Cancel", onClick: () => void cancelJob(r.jobId) });
+        }
+        if (status === "failed" || status === "cancelled" || status === "timeout" || status === "timed_out" || status === "dead_lettered") {
+          actions.push({ id: "retry", label: "Retry", onClick: () => void retryJob(r.jobId) });
+        }
+        if (isTerminal && status !== "archived") {
+          actions.push({ id: "archive", label: "Archive", onClick: () => void archiveJob(r.jobId) });
+        }
+        return actions;
+      }),
+    },
+  ], [openJobDetail, cancelJob, retryJob, archiveJob]);
 
   // JW4 — Detail dialog with 7 mandatory tabs
   const detailTabs = ["overview", "parameters", "input", "result", "thinking", "lifecycle", "raw"];
@@ -318,7 +371,17 @@ export function JobsPage() {
             bulkActions={bulkActions}
             onBulkAction={(action, selectedIds) => {
               const ids = selectedIds as string[];
-              if (action === "cancel") setConfirmAction({ action: "cancel", jobIds: ids, label: `Cancel ${ids.length} job(s)?` });
+              if (action === "export") {
+                const selected = filteredJobs.filter((job) => ids.includes(job.jobId));
+                const blob = new Blob([JSON.stringify(selected, null, 2)], { type: "application/json" });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement("a");
+                a.href = url;
+                a.download = `jobs-export-${Date.now()}.json`;
+                a.click();
+                URL.revokeObjectURL(url);
+              }
+              else if (action === "cancel") setConfirmAction({ action: "cancel", jobIds: ids, label: `Cancel ${ids.length} job(s)?` });
               else if (action === "retry") setConfirmAction({ action: "retry", jobIds: ids, label: `Retry ${ids.length} job(s)?` });
               else if (action === "delete") setConfirmAction({ action: "delete", jobIds: ids, label: `Delete ${ids.length} job(s)? This cannot be undone.` });
             }}

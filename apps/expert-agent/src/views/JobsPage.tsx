@@ -363,6 +363,22 @@ export function JobsPage() {
       sortValue: (job) => normaliseStatus(job.status),
     },
     {
+      // EA-93 / PS-76: surface scheduling priority (was always 0 / not shown).
+      id: 'priority',
+      header: 'Priority',
+      cell: (job) => <span className="tabular-nums">{Number(job.priority ?? 0)}</span>,
+      sortable: true,
+      sortValue: (job) => Number(job.priority ?? 0),
+    },
+    {
+      // EA-93 / PS-76: surface delivery attempt count.
+      id: 'attempt',
+      header: 'Attempt',
+      cell: (job) => <span className="tabular-nums">{Number(job.attempt ?? 1)}</span>,
+      sortable: true,
+      sortValue: (job) => Number(job.attempt ?? 1),
+    },
+    {
       id: 'created_at',
       header: 'Created',
       cell: (job) => <DateCell value={job.created_at} />,
@@ -447,12 +463,34 @@ export function JobsPage() {
       sortable: true,
       sortValue: (job) => retryCount(job),
     },
-  ], [loadJob]);
+    {
+      // EA-92/93/94 + PS-76: per-row Detail / Cancel / Retry / Delete actions
+      // (previously only selection-based bulk actions existed).
+      id: 'actions',
+      header: 'Actions',
+      cell: (job) => {
+        const id = jobId(job);
+        // PS-76 v2 per-row actions: always render Detail / Cancel / Retry / Delete
+        // (matching the shared jobs-console contract); disable the actions that do
+        // not apply to the job's current state instead of hiding them, so the row
+        // action surface is stable and discoverable (W28A-667 / PS-76).
+        return (
+          <div className="flex flex-wrap gap-1">
+            <Button type="button" variant="outline" size="sm" onClick={() => void loadJob(job)}>Detail</Button>
+            <Button type="button" variant="secondary" size="sm" disabled={!canMutateJobs || !canCancel(job)} onClick={() => void performAction('cancel', [id])}>Cancel</Button>
+            <Button type="button" variant="secondary" size="sm" disabled={!canMutateJobs || !canRetry(job)} onClick={() => void performAction('retry', [id])}>Retry</Button>
+            <Button type="button" variant="destructive" size="sm" disabled={!isAdmin || !canDelete(job)} onClick={() => void performAction('delete', [id])}>Delete</Button>
+          </div>
+        );
+      },
+    },
+  ], [loadJob, performAction, canMutateJobs, isAdmin]);
 
   const bulkActions = React.useMemo<BulkAction[]>(() => [
     { label: 'Cancel Selected', action: 'cancel' },
     { label: 'Retry Selected', action: 'retry' },
     ...(isAdmin ? [{ label: 'Delete Selected', action: 'delete' }] : []),
+    { label: 'Export Selected', action: 'export' },
   ], [isAdmin]);
 
   if (!canReadJobs) {
@@ -580,6 +618,20 @@ export function JobsPage() {
           selectionColumnPosition="start"
           bulkActions={bulkActions}
           onBulkAction={(action, selectedIds) => {
+            if (action === 'export') {
+              // PS-76 bulk export: download the selected job records as JSON
+              // (client-side, matching the shared jobs-console export contract).
+              const selected = filteredJobs.filter((job) => selectedIds.includes(jobId(job)));
+              const blob = new Blob([JSON.stringify(selected, null, 2)], { type: 'application/json' });
+              const url = URL.createObjectURL(blob);
+              const anchor = document.createElement('a');
+              anchor.href = url;
+              anchor.download = 'expert-agent-jobs-export.json';
+              anchor.click();
+              URL.revokeObjectURL(url);
+              setStatus(`Exported ${selected.length} selected job(s).`);
+              return;
+            }
             const labels: Record<string, string> = {
               cancel: `Cancel ${selectedIds.length} selected job(s)?`,
               retry: `Retry ${selectedIds.length} selected job(s)?`,
@@ -607,6 +659,14 @@ export function JobsPage() {
               <div className="flex flex-wrap gap-2">
                 <Button type="button" variant="secondary" size="sm" onClick={() => void copyJobId()}>
                   Copy Job ID
+                </Button>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => { void navigator.clipboard?.writeText(JSON.stringify(selectedJob, null, 2)); }}
+                >
+                  Copy JSON
                 </Button>
                 <Button
                   type="button"
@@ -658,6 +718,10 @@ export function JobsPage() {
                   <div><dt className="font-medium">Duration</dt><dd>{formatDuration(selectedJob)}</dd></div>
                   <div><dt className="font-medium">Retry count</dt><dd>{retryCount(selectedJob)}</dd></div>
                   <div><dt className="font-medium">Trace ID</dt><dd className="font-mono text-xs">{selectedJob.trace_id ?? '-'}</dd></div>
+                  <div className="md:col-span-2">
+                    <dt className="font-medium">Correlation context</dt>
+                    <dd className="font-mono text-xs">{`trace=${selectedJob.trace_id ?? '-'} · session=${selectedJob.session_id ?? '-'} · user=${selectedJob.user_id ?? '-'} · channel=${selectedJob.channel_id ?? '-'}`}</dd>
+                  </div>
                 </dl>
               </TabsContent>
               <TabsContent value="parameters">

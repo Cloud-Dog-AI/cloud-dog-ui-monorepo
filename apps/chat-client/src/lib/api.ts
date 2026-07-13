@@ -23,6 +23,7 @@ import type {
   ChatUserRecord,
   FileIntakeSettings,
   JobRecord,
+  LlmTestResult,
   LogsResponse,
   LogSurfaceId,
   LogSurfaceOption,
@@ -153,6 +154,7 @@ export type ChatApi = Readonly<{
   revokeApiKey: (keyId: string) => Promise<void>;
   getVersionInfo: () => Promise<VersionInfoRecord>;
   getStatus: () => Promise<ResourceStatusRecord>;
+  testModel: () => Promise<LlmTestResult>;
   getMonitoringSummary: () => Promise<MonitoringSummary>;
   getLogs: (params?: { limit?: number; surface?: LogSurfaceId }) => Promise<LogsResponse>;
   listJobs: () => Promise<JobRecord[]>;
@@ -194,9 +196,19 @@ function toSessionArray(value: unknown): SessionSummary[] {
     const id = String(obj.id ?? "").trim();
     const createdAt = String(obj.created_at ?? "").trim();
     if (!id || !createdAt) continue;
+    const expiresAt = String(obj.expires_at ?? "").trim();
+    const ttlRaw = obj.ttl_seconds;
+    const ttlSeconds =
+      typeof ttlRaw === "number" && Number.isFinite(ttlRaw)
+        ? ttlRaw
+        : ttlRaw != null && ttlRaw !== "" && Number.isFinite(Number(ttlRaw))
+        ? Number(ttlRaw)
+        : undefined;
     out.push({
       id,
       created_at: createdAt,
+      expires_at: expiresAt || undefined,
+      ttl_seconds: ttlSeconds,
       metadata: toObject(obj.metadata),
       log_path: String(obj.log_path ?? ""),
     });
@@ -1002,6 +1014,9 @@ export function createChatApi(opts: {
           version: String(obj.version ?? ""),
           environment: String(obj.environment ?? ""),
           server_id: String(obj.server_id ?? ""),
+          // W28E-1863 fix-wave-d (WSC-014): build provenance for the About page.
+          source_commit: String(obj.source_commit ?? obj.commit ?? ""),
+          build_date: String(obj.build_date ?? ""),
         } satisfies VersionInfoRecord;
       }),
 
@@ -1026,6 +1041,22 @@ export function createChatApi(opts: {
           environment: String(resources.environment ?? ""),
           server_id: String(resources.server_id ?? ""),
         } satisfies ResourceStatusRecord;
+      }),
+
+    testModel: () =>
+      guarded(async () => {
+        const data = await client.post<unknown>("llm/test", {}, {
+          headers: authHeaders(),
+        });
+        const obj = toObject(data);
+        return {
+          ok: Boolean(obj.ok),
+          model: String(obj.model ?? ""),
+          provider: String(obj.provider ?? ""),
+          latency_ms: Number(obj.latency_ms ?? 0),
+          sample: String(obj.sample ?? ""),
+          error: String(obj.error ?? ""),
+        } satisfies LlmTestResult;
       }),
 
     getMonitoringSummary: () =>

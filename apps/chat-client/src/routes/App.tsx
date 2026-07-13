@@ -26,6 +26,7 @@ import {
   LayoutDashboard,
   MessageSquare,
   Radio,
+  Search,
   Server,
   Settings,
   Shield,
@@ -34,10 +35,13 @@ import {
   Wrench,
 } from "lucide-react";
 import { z } from "zod";
-import { BaseRuntimeConfigSchema, ConfigProvider, useConfig } from "@cloud-dog/config";
+import { BaseRuntimeConfigSchema } from "@cloud-dog/config";
+import { ChatConfigProvider, useConfig } from "../lib/runtime-config";
 import { AuthProvider, LoginPage, SessionTimeoutProvider, useAuth } from "@cloud-dog/auth";
 import {
   AboutDialog,
+  AboutPage,
+  CopyrightFooter,
   RightDrawer,
   ServiceStatusBar,
   ShellLayout,
@@ -50,6 +54,13 @@ import {
   ToolCallPanel,
   formatRelative,
 } from "@cloud-dog/ui";
+import {
+  IdamUsersPage,
+  IdamGroupsPage,
+  IdamApiKeysPage,
+  IdamRolesPage,
+  IdamRbacPage,
+} from "@cloud-dog/idam";
 import { manifest } from "./manifest";
 import { AppStateProvider, useAppState } from "../state/AppState";
 import { SessionsPage } from "../views/SessionsPage";
@@ -57,10 +68,6 @@ import { ChatPage } from "../views/ChatPage";
 import { McpHealthPage } from "../views/McpHealthPage";
 import { ToolsPage } from "../views/ToolsPage";
 import { SettingsPage } from "../views/SettingsPage";
-import { UsersPage } from "../views/UsersPage";
-import { GroupsPage } from "../views/GroupsPage";
-import { ApiKeysPage } from "../views/ApiKeysPage";
-import { AdminPage } from "../views/AdminPage";
 import { McpConsolePage } from "../views/McpConsolePage";
 import { A2aConsolePage } from "../views/A2aConsolePage";
 import { MonitoringPage } from "../views/MonitoringPage";
@@ -69,11 +76,11 @@ import { DocsPage } from "../views/DocsPage";
 import { JobsPageView } from "../views/JobsPageView";
 import { FileBrowserPage } from "../views/FileBrowserPage";
 import { ProfilesPage } from "../views/ProfilesPage";
+import { ResearchRoute } from "./research";
 import { isAdminUser } from "../lib/rbac";
 
 const AppRuntimeConfigSchema = BaseRuntimeConfigSchema.extend({
   AUTH_MODE: z.enum(["api_key", "cookie", "oidc"]).default("api_key"),
-  API_KEY_HEADER: z.string().default("X-API-Key"),
   APP_VERSION: z.string().optional(),
   MCP_BASE_URL: z.string().default("/mcp"),
   A2A_EVENTS_URL: z.string().default("/a2a/events"),
@@ -200,6 +207,9 @@ function ShellApp() {
   const [loginError, setLoginError] = React.useState<string | null>(null);
   const [aboutOpen, setAboutOpen] = React.useState(false);
   const [versionLabel, setVersionLabel] = React.useState(cfg.APP_VERSION ?? "");
+  // W28E-1863 fix-wave-d (WSC-014 / PS-30 UI-R7.3): container build provenance for
+  // the shared @cloud-dog/shell AboutPage (fetched from the live /version route).
+  const [buildIdentity, setBuildIdentity] = React.useState<{ commitHash?: string; buildDate?: string }>({});
   const [serviceStatuses, setServiceStatuses] = React.useState<ServiceStatus[]>([
     { name: "API", url: `${cfg.API_BASE_URL}/health`, status: "unknown" },
     { name: "MCP", url: `${cfg.MCP_BASE_URL}/health`, status: "unknown" },
@@ -221,7 +231,13 @@ function ShellApp() {
     const loadVersion = async () => {
       try {
         const info = await api.getVersionInfo();
-        if (!cancelled) setVersionLabel(info.version || cfg.APP_VERSION || "");
+        if (!cancelled) {
+          setVersionLabel(info.version || cfg.APP_VERSION || "");
+          setBuildIdentity({
+            commitHash: info.source_commit || undefined,
+            buildDate: info.build_date || undefined,
+          });
+        }
       } catch {
         if (!cancelled) setVersionLabel(cfg.APP_VERSION || "");
       }
@@ -262,32 +278,33 @@ function ShellApp() {
       children: [
         { label: "Dashboard", path: "/", icon: navIcon(LayoutDashboard) },
         { label: "Chat", path: "/chat", icon: navIcon(MessageSquare) },
+        { label: "Research", path: "/research", icon: navIcon(Search) },
         { label: "Sessions", path: "/sessions", icon: navIcon(Activity) },
         { label: "Profiles", path: "/profiles", icon: navIcon(Layers) },
         { label: "External Services", path: "/mcp-servers", icon: navIcon(Server) },
         { label: "Tools", path: "/tools", icon: navIcon(Wrench) },
-        { label: "File Browser", path: "/files", icon: navIcon(FolderOpen) },
-        { label: "Monitoring", path: "/monitoring", icon: navIcon(Activity) },
+        { label: "Catalogue", path: "/catalogue", icon: navIcon(FolderOpen) },
+        { label: "Audit Log", path: "/audit-log", icon: navIcon(Activity) },
       ],
     },
     {
       label: "Developer",
-      path: "/api-docs",
+      path: "/developer/api-docs",
       icon: navIcon(Wrench),
       children: [
-        { label: "API Docs", path: "/api-docs", icon: navIcon(FileText) },
-        { label: "MCP Console", path: "/mcp-console", icon: navIcon(Terminal) },
-        { label: "A2A Console", path: "/a2a-console", icon: navIcon(Radio) },
+        { label: "API Docs", path: "/developer/api-docs", icon: navIcon(FileText) },
+        { label: "MCP Console", path: "/developer/mcp-console", icon: navIcon(Terminal) },
+        { label: "A2A Console", path: "/developer/a2a-console", icon: navIcon(Radio) },
       ],
     },
     {
       label: "System",
-      path: "/jobs",
+      path: "/system/jobs",
       icon: navIcon(Activity),
       children: [
-        { label: "Jobs", path: "/jobs", icon: navIcon(Layers) },
-        { label: "Settings", path: "/settings", icon: navIcon(Settings) },
-        { label: "About", path: "/about", icon: navIcon(Info) },
+        { label: "Jobs", path: "/system/jobs", icon: navIcon(Layers) },
+        { label: "Settings", path: "/system/settings", icon: navIcon(Settings) },
+        { label: "About", path: "/system/about", icon: navIcon(Info) },
       ],
     },
     ...(isAdmin
@@ -299,6 +316,7 @@ function ShellApp() {
             { label: "Users", path: "/admin/users", icon: navIcon(Users) },
             { label: "Groups", path: "/admin/groups", icon: navIcon(Users) },
             { label: "API Keys", path: "/admin/api-keys", icon: navIcon(Key) },
+            { label: "Roles", path: "/admin/roles", icon: navIcon(Shield) },
             { label: "RBAC", path: "/admin/rbac", icon: navIcon(Shield) },
           ],
         }]
@@ -373,10 +391,16 @@ function ShellApp() {
   };
 
   if (!auth.isAuthenticated) {
+    // W28A-727-R5 flat login: render the username/password form in cookie
+    // AUTH_MODE (the deployed default) so the three flat WebUI accounts —
+    // admin / read-write / read-only — can authenticate against /auth/login.
+    // The cookie-mode LoginPage submits via auth.login({username,password})
+    // (→ /auth/login → /auth/me). The api-key form is retained for api_key mode.
+    const loginMode = cfg.AUTH_MODE === "cookie" ? "cookie" : "api_key";
     return (
       <LoginPage
         appName={manifest.appName}
-        mode="api_key"
+        mode={loginMode}
         apiKeyValue={loginDraft}
         onApiKeyChange={setLoginDraft}
         onApiKeySubmit={({ apiKey }) => onLogin(apiKey)}
@@ -398,7 +422,7 @@ function ShellApp() {
         userMenu={{
           displayName: auth.user?.displayName ?? "admin",
           email: auth.user?.email,
-          onSettings: () => navigate("/settings"),
+          onSettings: () => navigate("/system/settings"),
           onLogout,
         }}
       >
@@ -409,30 +433,68 @@ function ShellApp() {
                 <Route path="/" element={<DashboardPage />} />
                 <Route path="/dashboard" element={<Navigate to="/" replace />} />
                 <Route path="/chat" element={<ChatPage />} />
+                <Route path="/research" element={<ResearchRoute />} />
                 <Route path="/sessions" element={<SessionsPage />} />
                 <Route path="/mcp-servers" element={<McpHealthPage />} />
+                <Route path="/source-connections" element={<Navigate to="/mcp-servers" replace />} />
                 <Route path="/tools" element={<ToolsPage />} />
-                <Route path="/mcp-console" element={<McpConsolePage />} />
-                <Route path="/a2a-console" element={<A2aConsolePage />} />
-                <Route path="/monitoring" element={<MonitoringPage />} />
-                <Route path="/jobs" element={<JobsPageView />} />
-                <Route path="/files" element={<FileBrowserPage />} />
-                <Route path="/docs" element={<Navigate to="/api-docs" replace />} />
-                <Route path="/api-docs" element={<DocsPage />} />
-                <Route path="/settings" element={<SettingsPage />} />
+                <Route path="/developer/mcp-console" element={<McpConsolePage />} />
+                <Route path="/mcp-console" element={<Navigate to="/developer/mcp-console" replace />} />
+                <Route path="/developer/a2a-console" element={<A2aConsolePage />} />
+                <Route path="/a2a-console" element={<Navigate to="/developer/a2a-console" replace />} />
+                <Route path="/audit-log" element={<MonitoringPage />} />
+                <Route path="/audit" element={<Navigate to="/audit-log" replace />} />
+                <Route path="/diagnostics-audit" element={<Navigate to="/audit-log" replace />} />
+                <Route path="/observability" element={<Navigate to="/audit-log" replace />} />
+                <Route path="/logs" element={<Navigate to="/audit-log" replace />} />
+                <Route path="/monitoring" element={<Navigate to="/audit-log" replace />} />
+                <Route path="/system/jobs" element={<JobsPageView />} />
+                <Route path="/jobs" element={<Navigate to="/system/jobs" replace />} />
+                <Route path="/catalogue" element={<FileBrowserPage />} />
+                <Route path="/files" element={<Navigate to="/catalogue" replace />} />
+                <Route path="/developer/api-docs" element={<DocsPage />} />
+                <Route path="/docs" element={<Navigate to="/developer/api-docs" replace />} />
+                <Route path="/openapi" element={<Navigate to="/developer/api-docs" replace />} />
+                <Route path="/api-docs" element={<Navigate to="/developer/api-docs" replace />} />
+                <Route path="/system/settings" element={<SettingsPage />} />
+                <Route path="/settings" element={<Navigate to="/system/settings" replace />} />
+                {/* W28E-1845: canonical navigable About page (shared @cloud-dog/shell AboutPage); /about is a legacy alias. */}
+                <Route
+                  path="/system/about"
+                  element={
+                    <AboutPage
+                      productName={manifest.appName}
+                      description="Cloud-Dog chat-client orchestrates LLM, MCP, and A2A workflows through a shared operational UI shell."
+                      version={versionLabel}
+                      commitHash={buildIdentity.commitHash}
+                      buildDate={buildIdentity.buildDate}
+                    />
+                  }
+                />
+                <Route path="/about" element={<Navigate to="/system/about" replace />} />
                 <Route path="/profiles" element={<ProfilesPage />} />
+                <Route path="/login" element={<Navigate to="/" replace />} />
+                {/* STD-F03 / W28E-1838: /admin/* is the canonical IDAM namespace — shared @cloud-dog/idam components (W28A-876). */}
+                <Route path="/admin/users" element={isAdmin ? <IdamUsersPage apiBaseUrl="" /> : <Navigate to="/" replace />} />
+                <Route path="/admin/groups" element={isAdmin ? <IdamGroupsPage apiBaseUrl="" /> : <Navigate to="/" replace />} />
+                <Route path="/admin/api-keys" element={isAdmin ? <IdamApiKeysPage apiBaseUrl="" /> : <Navigate to="/" replace />} />
+                <Route path="/admin/roles" element={isAdmin ? <IdamRolesPage apiBaseUrl="" /> : <Navigate to="/" replace />} />
+                <Route path="/admin/rbac" element={isAdmin ? <IdamRbacPage apiBaseUrl="" /> : <Navigate to="/" replace />} />
                 <Route path="/admin" element={<Navigate to={isAdmin ? "/admin/rbac" : "/"} replace />} />
-                <Route path="/admin/rbac" element={isAdmin ? <AdminPage /> : <Navigate to="/" replace />} />
-                <Route path="/admin/users" element={isAdmin ? <UsersPage /> : <Navigate to="/" replace />} />
-                <Route path="/admin/groups" element={isAdmin ? <GroupsPage /> : <Navigate to="/" replace />} />
-                <Route path="/admin/api-keys" element={isAdmin ? <ApiKeysPage /> : <Navigate to="/" replace />} />
+                {/* Legacy /idam/* aliases → canonical /admin/* (W28A-874 /idam-canonical lock retired by STD-F03). */}
+                <Route path="/idam" element={<Navigate to="/admin/rbac" replace />} />
+                <Route path="/idam/users" element={<Navigate to="/admin/users" replace />} />
+                <Route path="/idam/groups" element={<Navigate to="/admin/groups" replace />} />
+                <Route path="/idam/api-keys" element={<Navigate to="/admin/api-keys" replace />} />
+                <Route path="/idam/roles" element={<Navigate to="/admin/roles" replace />} />
+                <Route path="/idam/rbac" element={<Navigate to="/admin/rbac" replace />} />
                 <Route path="*" element={<Navigate to="/" replace />} />
               </Routes>
           </div>
 
           <div className="flex flex-wrap items-center justify-between gap-2 border-t pt-3 text-xs text-muted-foreground">
             <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-              <span>Copyright 2026 Cloud-Dog, Viewdeck Engineering Limited</span>
+              <CopyrightFooter className="px-0 py-0" disableVersionProbe />
               <span>Version {versionLabel || cfg.APP_VERSION || "unknown"}</span>
             </div>
             <SessionTimerDisplay timeoutMinutes={cfg.SESSION_TIMEOUT_MINUTES} />
@@ -453,9 +515,9 @@ function ShellApp() {
 
 export function App() {
   return (
-    <ConfigProvider schema={AppRuntimeConfigSchema}>
+    <ChatConfigProvider schema={AppRuntimeConfigSchema}>
       <AppWithProviders />
-    </ConfigProvider>
+    </ChatConfigProvider>
   );
 }
 
@@ -467,7 +529,7 @@ function AppWithProviders() {
       config={{
         mode: (cfg.AUTH_MODE === "cookie" ? "cookie" : "api_key") as "cookie" | "api_key",
         apiBaseUrl: cfg.API_BASE_URL,
-        cookie: { loginPath: "/auth/login", mePath: "/auth/me", logoutPath: "/auth/logout" },
+        cookie: { loginPath: "/auth/login", mePath: "/auth/me?optional=1", logoutPath: "/auth/logout" },
       }}
     >
       <AppStateProvider>

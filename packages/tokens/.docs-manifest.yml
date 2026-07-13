@@ -1,0 +1,6 @@
+schema-version: 1.0
+project: tokens
+canon-set: UI-MONOREPO-PACKAGE
+canon-template-baseline: 1.0
+conditional-docs: []
+additional-docs: []

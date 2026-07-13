@@ -14,10 +14,37 @@
 
 // @cloud-dog/ui — Public barrel exports.
 
-export { cn } from "./utils/cn";
+export { cn } from './utils/cn';
+export {
+  formatRelativeTime,
+  formatMillis,
+  formatBytes,
+  formatSeconds,
+} from './utils/formatRelativeTime';
 
-export { Button, buttonVariants } from "./components/button";
-export type { ButtonProps } from "./components/button";
+export { ActionableError } from './actionable-error';
+export type { ActionableErrorAction, ActionableErrorProps } from './actionable-error';
+export { ConnectionPicker } from './connection-picker';
+export type {
+  ConnectionPickerOption,
+  ConnectionPickerProps,
+  ConnectionPickerTestResult,
+} from './connection-picker';
+export { DiscoveredMultiSelect } from './discovered-multi-select';
+export type { DiscoveredMultiSelectProps, DiscoveredOption } from './discovered-multi-select';
+export { MasterDetailLayout } from './master-detail-layout';
+export type { MasterDetailLayoutProps } from './master-detail-layout';
+export { SavedQueryControls } from './saved-query-controls';
+export type { SavedQueryControlsProps, SavedQueryOption } from './saved-query-controls';
+export { ScopeTestPanel } from './scope-test-panel';
+export type {
+  ScopeTestAccessibleItem,
+  ScopeTestPanelProps,
+  ScopeTestResult,
+} from './scope-test-panel';
+
+export { Button, buttonVariants } from './components/button';
+export type { ButtonProps } from './components/button';
 
 export {
   Input,
@@ -30,32 +57,78 @@ export {
   FieldHelp,
   Combobox,
   MultiSelect,
-} from "./components/input";
-export type { SwitchProps, ComboboxOption, ComboboxProps, MultiSelectOption, MultiSelectProps } from "./components/input";
+  DatePicker,
+  DateRangePicker,
+  toISODate,
+  fromISODate,
+} from './components/input';
+export type {
+  SwitchProps,
+  ComboboxOption,
+  ComboboxProps,
+  MultiSelectOption,
+  MultiSelectProps,
+  DatePickerProps,
+  DateRangePickerProps,
+  DateRange,
+} from './components/input';
 
-export { Card, CardHeader, CardContent, CardFooter } from "./components/card";
+export { Card, CardHeader, CardContent, CardFooter } from './components/card';
 
-export { Dialog, ConfirmDialog, Sheet } from "./components/dialog";
-export type { DialogProps, ConfirmDialogProps, SheetProps } from "./components/dialog";
+export { Dialog, ConfirmDialog, Sheet } from './components/dialog';
+export type { DialogProps, ConfirmDialogProps, SheetProps } from './components/dialog';
 
-export { Popover, Tooltip, DropdownMenu } from "./components/popover";
-export type { DropdownItem } from "./components/popover";
+export { Popover, Tooltip, HelpTip, DropdownMenu } from './components/popover';
+export type { HelpTipProps } from './components/popover';
+export type { DropdownItem } from './components/popover';
 
-export { Table, TableHeader, TableBody, TableRow, TableHead, TableCell, DataTable, statusColumn } from "./components/table";
-export type { DataColumn, DataTableProps, BulkAction, StatusColumnOptions } from "./components/table";
+export {
+  Table,
+  TableHeader,
+  TableBody,
+  TableRow,
+  TableHead,
+  TableCell,
+  DataTable,
+  DataTableActionCell,
+  createDataTableActionColumn,
+  statusColumn,
+} from './components/table';
+export type {
+  DataColumn,
+  DataTableProps,
+  BulkAction,
+  DataTableAction,
+  StatusColumnOptions,
+} from './components/table';
 
-export { Tabs, TabsList, TabsTrigger, TabsContent } from "./components/tabs";
+export { Tabs, TabsList, TabsTrigger, TabsContent } from './components/tabs';
 
-export { Alert, ToastProvider, useToast, Toaster, Progress, Spinner } from "./components/feedback";
-export type { ToastItem, ToastVariant } from "./components/feedback";
+export { Alert, ToastProvider, useToast, Toaster, Progress, Spinner } from './components/feedback';
+export type { ToastItem, ToastVariant } from './components/feedback';
 
-export { Separator, Badge, Avatar, Skeleton, StatusBadge, detectTone, toneSortWeight } from "./components/layout";
-export type { StatusBadgeTone, StatusBadgeProps } from "./components/layout";
+export {
+  Separator,
+  Badge,
+  Avatar,
+  Skeleton,
+  StatusBadge,
+  detectTone,
+  toneSortWeight,
+} from './components/layout';
+export type { StatusBadgeTone, StatusBadgeProps } from './components/layout';
 
-export { useFocusTrap } from "./hooks/useFocusTrap";
-export { useKeyboardNav } from "./hooks/useKeyboardNav";
-export type { KeyboardNavOptions } from "./hooks/useKeyboardNav";
-export { useReducedMotion } from "./hooks/useReducedMotion";
+export { useFocusTrap } from './hooks/useFocusTrap';
+export { useKeyboardNav } from './hooks/useKeyboardNav';
+export type { KeyboardNavOptions } from './hooks/useKeyboardNav';
+export { useReducedMotion } from './hooks/useReducedMotion';
+export { useAuditLink, parseAuditLinkParams, getAuditLinkProps } from './hooks/useAuditLink';
+export type {
+  AuditLink,
+  AuditLinkExtras,
+  AuditFilters,
+  AuditLinkProps,
+} from './hooks/useAuditLink';
 
 export {
   CrudPage,
@@ -69,9 +142,12 @@ export {
   JsonExplorer,
   StructuredView,
   EntityForm,
+  MetadataEditor,
   EntityDialog,
   ComposeDialog,
   RelatedItemsPanel,
+  SessionsHistoryPanel,
+  sessionsHistoryStatusTone,
   RelationshipGraph,
   FileArtifactCard,
   FileBrowser,
@@ -93,6 +169,7 @@ export {
   LogTablePanel,
   LogStream,
   ResourceMetrics,
+  DiagnosticsHealthPanel,
   RelativeTime,
   HealthWidget,
   MetricCard,
@@ -109,11 +186,26 @@ export {
   CodeViewer,
   DiffViewer,
   SearchPanel,
-} from "./patterns";
+  PromptEditor,
+  PromptVersionPicker,
+  PromptTestRunner,
+  WorkedExamplePopup,
+  SelectionCriteriaPanel,
+  loadPersistedSelection,
+  CRUD_ACTION_LABELS,
+  CRUD_TABLE_MESSAGES,
+  CRUD_EXTENSION_SLOT_TEST_ID,
+  crudDialogTitle,
+  crudRequiredMessage,
+  crudDeleteConfirmation,
+  singularizeEntityName,
+} from './patterns';
+export type { WorkedExampleProps } from './patterns/WorkedExamplePopup';
 export type {
   CrudColumn,
   CrudBulkAction,
   CrudPageProps,
+  CrudActionMode,
   StatusCardProps,
   StatusTone,
   LogViewerProps,
@@ -133,6 +225,9 @@ export type {
   EntityFormProps,
   EntityFieldDef,
   EntityFormMode,
+  MetadataEditorProps,
+  MetadataFieldSpec,
+  MetadataFieldType,
   EntityDialogProps,
   EntityDialogFormProps,
   EntityDialogBodyProps,
@@ -143,6 +238,14 @@ export type {
   ComposedMessage,
   RelatedItemsPanelProps,
   RelatedItem,
+  SessionsHistoryPanelProps,
+  SessionsHistoryRow,
+  SessionsHistoryAction,
+  SessionsHistoryConfirmConfig,
+  SessionsHistoryDetailItem,
+  SessionsHistoryTimestamp,
+  SessionsHistoryVariant,
+  SessionsHistoryStatusTone,
   RelationshipGraphProps,
   RelationshipNode,
   RelationshipEdge,
@@ -167,6 +270,8 @@ export type {
   Ps72Meta,
   Ps72ExecuteResult,
   SettingsPanelProps,
+  SettingsPanelServerTab,
+  SettingsPanelStatus,
   SettingGroupDef,
   SettingGroupProps,
   SettingControlProps,
@@ -181,6 +286,9 @@ export type {
   LogEntry,
   ResourceMetricsProps,
   MetricItem,
+  DiagnosticsHealthPanelProps,
+  DiagnosticsHealthItem,
+  DiagnosticsMetricCardItem,
   RelativeTimeProps,
   HealthWidgetProps,
   HealthStatus,
@@ -195,12 +303,14 @@ export type {
   ApiDocsMode,
   McpToolDoc,
   A2aSkillDoc,
+  ApiDocsExtraTab,
   AdminUsersPageProps,
   AdminGroupsPageProps,
   AdminApiKeysPageProps,
   AdminRbacPageProps,
   RbacBinding,
   RbacUser,
+  RoleDef,
   JobsPageProps,
   JobItem,
   JobStatus,
@@ -213,9 +323,97 @@ export type {
   SearchFilterOption,
   SearchFilterValue,
   SearchFilterValues,
-} from "./patterns";
+  PromptEditorProps,
+  PromptTemplateValues,
+  PromptVersionPickerProps,
+  PromptVersion,
+  PromptTestRunnerProps,
+  PromptTestCase,
+  PromptTestResult,
+  PromptTestStatus,
+  SelectionCriteriaPanelProps,
+  SelectionCriteria,
+  SelectionCriteriaField,
+  SelectionCriteriaSources,
+  SelectionOption,
+  ProfileOption,
+  WorkspaceOption,
+  RefOption,
+  PathOption,
+  AuthorOption,
+  StashOption,
+  RefType,
+} from './patterns';
 
-export { formatRelative } from "./components/time/RelativeTimeUtils";
+export { formatRelative } from './components/time/RelativeTimeUtils';
+
+// Multimodal components (W28F-948) — inline image/video/audio/PDF, drag-drop
+// upload, live entity-graph + convergence-cluster, output-language toggle.
+// Shared in @cloud-dog/ui for reuse across chat-client + search-mcp WebUI.
+export {
+  ImagePreview,
+  VideoPlayer,
+  AudioPlayer,
+  PDFViewer,
+  DragDropUpload,
+  DEFAULT_MULTIMODAL_ACCEPT,
+  fileMatchesAccept,
+  EntityGraphLive,
+  reduceEntityGraph,
+  ConvergenceClusterLive,
+  reduceConvergence,
+  LanguageToggle,
+  DEFAULT_OUTPUT_LANGUAGES,
+  OUTPUT_LANGUAGE_LABELS,
+  RTL_LANGUAGES,
+  buildStoragePathReference,
+  buildUrlReference,
+  isInlineDataUrl,
+  normaliseAssetReference,
+  tryNormaliseAssetReference,
+  formatTimecode,
+} from './multimodal';
+export type {
+  ImagePreviewProps,
+  VideoPlayerProps,
+  AudioPlayerProps,
+  PDFViewerProps,
+  DragDropUploadProps,
+  EntityGraphLiveProps,
+  ConvergenceClusterLiveProps,
+  LanguageToggleProps,
+  TranscriptCue,
+  MediaTranscript,
+  Waveform,
+  EntityGraphEvent,
+  ConvergenceCluster,
+  ConvergenceSource,
+  ConvergenceEvent,
+  OutputLanguage,
+  AssetReference,
+  NormaliseAssetReferenceOptions,
+} from './multimodal';
 
 // lucide-react icons should be imported directly by apps, not re-exported here
 // (re-exporting causes Vite TDZ "Cannot access 'X' before initialization" errors)
+
+// W28E-1870-F — cross-service change-watch component set (PS-102 §10).
+export {
+  ChangeWatchPanel,
+  WatchJournalTable,
+  CriteriaBuilder,
+  WatchStatusBadge,
+  watchStateTone,
+} from './change-watch';
+export type {
+  ChangeWatchPanelProps,
+  WatchJournalTableProps,
+  CriteriaBuilderProps,
+  WatchStatusBadgeProps,
+  WatchState,
+  WatchRow,
+  WatchEventRow,
+  WatchCriteria,
+  WatchCriterion,
+  CriterionKind,
+} from './change-watch';

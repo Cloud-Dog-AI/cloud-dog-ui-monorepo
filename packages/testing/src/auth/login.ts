@@ -19,14 +19,7 @@ import type { Credentials } from "../types";
 
 export async function login(page: Page, credentials: Credentials): Promise<void> {
   await page.goto("/login");
-  try {
-    await page.getByLabel("Username").fill(credentials.username, { timeout: 5_000 });
-  } catch (error) {
-    if (!/\/login(?:\?.*)?$/.test(page.url())) {
-      return;
-    }
-    await page.getByLabel("Username").fill(credentials.username, { timeout: 30_000 });
-  }
-  await page.getByLabel("Password").fill(credentials.password, { timeout: 30_000 });
-  await page.getByRole("button", { name: "Sign in" }).click({ timeout: 30_000 });
+  await page.getByLabel("Username").fill(credentials.username);
+  await page.getByLabel("Password").fill(credentials.password);
+  await page.getByRole("button", { name: "Sign in" }).click();
 }

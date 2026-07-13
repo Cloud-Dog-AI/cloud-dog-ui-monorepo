@@ -41,6 +41,77 @@ export type ProfileDraft = Readonly<{
   index_policy: Record<string, unknown>;
 }>;
 
+export type SourceConnectionSummary = Readonly<{
+  name: string;
+  source_type: string;
+  uri_template: string;
+  credentials_ref?: string | null;
+  description: string;
+  status: string;
+  last_tested_at?: string | null;
+  last_test_result?: Record<string, unknown>;
+  created_at?: string;
+  updated_at?: string;
+}>;
+
+export type SourceConnectionDraft = Readonly<{
+  name: string;
+  source_type: string;
+  uri_template: string;
+  credentials_ref?: string | null;
+  description: string;
+}>;
+
+export type DiscoveryCacheMeta = Readonly<{
+  cache_key?: string | null;
+  status?: string;
+  stale?: boolean;
+  refreshed_at?: string | null;
+  ttl_seconds?: number | null;
+}>;
+
+export type DiscoveryResult<T> = Readonly<{
+  items: T[];
+  cache?: DiscoveryCacheMeta;
+}>;
+
+export type DiscoveryFieldItem = Readonly<{
+  name: string;
+  type?: string;
+  types?: string[];
+}>;
+
+export type ProfileScopeTestApiResult = Readonly<{
+  ok: boolean;
+  profile_id: string;
+  latency_ms?: number;
+  namespace_count?: number;
+  entity_count?: number;
+  namespaces?: NamespaceItem[];
+  entities_by_namespace?: Record<string, EntityItem[]>;
+  error?: string;
+}>;
+
+export type SavedQuerySummary = Readonly<{
+  id: number;
+  user_id?: string;
+  page_key: string;
+  name: string;
+  payload: Record<string, unknown>;
+  description?: string;
+  shared?: boolean;
+  created_at?: string;
+  updated_at?: string;
+}>;
+
+export type SavedQueryDraft = Readonly<{
+  page_key: string;
+  name: string;
+  payload: Record<string, unknown>;
+  description?: string;
+  shared?: boolean;
+}>;
+
 export type UserSummary = Readonly<{
   user_id: string;
   username: string;
@@ -156,6 +227,7 @@ export type AuditEvent = Readonly<{
   correlation_id?: string;
   trace_id?: string;
   request_id?: string;
+  session_id?: string;
   service?: string;
   service_instance?: string;
   environment?: string;

@@ -181,7 +181,6 @@ export function ChannelsPage() {
   }, [api, captureFailure, clearFailure, closeDialog, editingId, experts, form, refresh]);
 
   const deleteChannel = React.useCallback(async (channel: ChannelRecord) => {
-    if (!window.confirm(`Delete channel ${channel.name}?`)) return;
     clearFailure();
     try {
       await api.deleteChannel(channel.id);
@@ -195,7 +194,6 @@ export function ChannelsPage() {
 
   const bulkDeleteChannels = React.useCallback(async (selected: ChannelRecord[]) => {
     if (!selected.length) return;
-    if (!window.confirm(`Delete ${selected.length} selected channels?`)) return;
     clearFailure();
     try {
       await Promise.all(selected.map(async (channel) => api.deleteChannel(channel.id)));
@@ -264,7 +262,7 @@ export function ChannelsPage() {
   const navigateToLogs = React.useCallback((channel: ChannelRecord) => {
     const params = new URLSearchParams();
     params.set('filter_channel', String(channel.id));
-    window.location.href = `/admin/monitoring?${params.toString()}`;
+    window.location.href = `/audit-log?${params.toString()}`;
   }, []);
 
   const savePermissions = React.useCallback(async (channel: ChannelRecord) => {

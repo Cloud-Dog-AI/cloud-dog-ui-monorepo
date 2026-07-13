@@ -40,10 +40,12 @@ export function LeftNav(props: {
   items: NavItemType[];
   mode?: LeftNavMode;
   width?: LeftNavWidth;
+  testIdPrefix?: string;
 }) {
   const shell = useShell();
   const mode: LeftNavMode = props.mode ?? "rail";
   const width = props.width ?? { expanded: "w-60", collapsed: "w-16" };
+  const testIdPrefix = props.testIdPrefix ?? "cloud-dog-shell";
   let hasPermission: (p: string) => boolean = () => true;
   try {
     const auth = useAuth();
@@ -79,6 +81,7 @@ export function LeftNav(props: {
           ? width.collapsed
           : width.expanded
       )}
+      data-testid={mode === "drawer" ? `${testIdPrefix}-mobile-left-nav` : `${testIdPrefix}-left-nav-content`}
     >
       <div className="h-full overflow-y-auto py-3">
         <div className={cn("px-2 space-y-1", shell.navCollapsed ? "px-1" : "px-2")}>
@@ -103,6 +106,7 @@ export function LeftNav(props: {
           )}
           aria-label={shell.navCollapsed ? "Expand navigation" : "Collapse navigation"}
           onClick={() => shell.toggleNav()}
+          data-testid={`${testIdPrefix}-left-nav-toggle`}
         >
           <span aria-hidden="true">{shell.navCollapsed ? ">>" : "<<"}</span>
         </button>

@@ -38,7 +38,7 @@ function validate(form: UserForm, editingId: number | null): Record<string, stri
   if (!form.username.trim()) errors.username = 'Username is required.';
   if (!form.email.trim()) errors.email = 'Email is required.';
   else if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(form.email)) errors.email = 'Enter a valid email address.';
-  if (editingId === null && !form.password.trim()) errors.password = 'example';
+  if (editingId === null && !form.password.trim()) errors.password = 'Password is required for new users.';
   return errors;
 }
 
@@ -145,7 +145,6 @@ export function UsersPage() {
   }, [api, captureFailure, clearFailure, closeDialog, editingId, form, refresh]);
 
   const deleteUser = React.useCallback(async (user: UserRecord) => {
-    if (!window.confirm(`Delete user ${user.username}?`)) return;
     clearFailure();
     try {
       await api.deleteUser(user.id);
@@ -170,7 +169,6 @@ export function UsersPage() {
 
   const bulkDelete = React.useCallback(async (selected: UserRecord[]) => {
     if (!selected.length) return;
-    if (!window.confirm(`Delete ${selected.length} selected users?`)) return;
     clearFailure();
     try {
       await Promise.all(selected.map(async (user) => api.deleteUser(user.id)));

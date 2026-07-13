@@ -51,8 +51,6 @@ export type EntityFormProps = Readonly<{
   submitLabel?: string;
   /** Prefix for field IDs to avoid conflicts when multiple forms exist on the same page. */
   idPrefix?: string;
-  /** Additional form content rendered before the action buttons. */
-  extra?: React.ReactNode;
 }>;
 
 export function EntityForm(props: EntityFormProps) {
@@ -73,10 +71,12 @@ export function EntityForm(props: EntityFormProps) {
         const disabled = isView || field.readOnly;
 
         return (
-          <div key={field.name} className="space-y-1">
+          // PS-77 CW-F2 — field wrapper (one EntityFieldDef rendered).
+          // In view/read-only mode the same wrapper additionally carries CW-F5 (display-only field).
+          <div key={field.name} className="space-y-1" data-testid="CW-F2" data-cw-display={isView || field.readOnly ? "CW-F5" : undefined} data-cw-field={field.name}>
             <Label htmlFor={fieldId}>
               {field.label}
-              {field.required ? <span aria-hidden="true" className="text-destructive ml-1">*</span> : null}
+              {field.required ? <span aria-hidden="true" data-testid="CW-F3" className="text-destructive ml-1">*</span> : null}
             </Label>
 
             {field.type === "boolean" ? (
@@ -156,9 +156,8 @@ export function EntityForm(props: EntityFormProps) {
         );
       })}
 
-      {props.extra}
-
-      <div className="flex items-center gap-2 pt-2">
+      {/* PS-77 CW-F4 — Save (primary) / Cancel (secondary) footer. */}
+      <div className="flex items-center gap-2 pt-2" data-testid="CW-F4">
         {!isView ? (
           <button
             type="submit"
@@ -168,7 +167,7 @@ export function EntityForm(props: EntityFormProps) {
           </button>
         ) : null}
         <Button type="button" variant="secondary" onClick={props.onCancel}>
-          {isView ? "Close" : "Cancel"}
+          Cancel
         </Button>
       </div>
     </form>

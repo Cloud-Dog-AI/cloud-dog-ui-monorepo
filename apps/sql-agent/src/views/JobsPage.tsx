@@ -39,6 +39,7 @@ import {
   type DataColumn,
 } from '@cloud-dog/ui';
 import {
+  downloadTextFile,
   ErrorState,
   PageFrame,
   requestJson,
@@ -72,6 +73,8 @@ const STATUS_OPTIONS = [
 const CANCELLABLE_STATUSES = new Set(['created', 'validated', 'queued', 'dispatched', 'running', 'retry_wait', 'blocked', 'paused']);
 const RETRYABLE_STATUSES = new Set(['failed', 'timeout', 'timed_out', 'dead_lettered']);
 const TERMINAL_STATUSES = new Set(['succeeded', 'completed', 'failed', 'cancelled', 'timeout', 'timed_out', 'dead_lettered', 'archived']);
+// Result downloads only make sense for jobs that produced a result.
+const DOWNLOADABLE_STATUSES = new Set(['succeeded', 'completed']);
 const NOT_STARTED_STATUSES = new Set(['created', 'validated', 'queued', 'scheduled', 'blocked']);
 
 function str(value: unknown, fallback = ''): string {
@@ -151,7 +154,7 @@ function statusBadgeClass(status: string): string {
 }
 
 function statusBadgeStyle(status: string): React.CSSProperties | undefined {
-  if (status === 'succeeded') return { backgroundColor: 'rgb(5, 150, 105)' };
+  if (status === 'succeeded') return { backgroundColor: 'rgb(4, 120, 87)' };
   if (['failed', 'dead_lettered', 'timeout', 'timed_out'].includes(status)) return { backgroundColor: 'rgb(185, 28, 28)' };
   if (['retry_wait', 'blocked', 'paused'].includes(status)) return { backgroundColor: 'rgb(254, 243, 199)' };
   if (status === 'cancelled') return { backgroundColor: 'rgb(229, 231, 235)' };
@@ -281,6 +284,37 @@ export function JobsPage() {
       }
     },
     [cfg.API_BASE_URL],
+  );
+
+  // PS-76 v2 / W28A #25-02: the job detail record exposes result downloads
+  // (JSON / ASCII table / CSV / Markdown) via the same `/jobs/{id}/result?format=`
+  // surface the Search page uses, so a completed job's answer is exportable from Jobs.
+  const downloadJobResult = React.useCallback(
+    async (format: 'json' | 'table' | 'csv' | 'markdown') => {
+      if (!detailJob) return;
+      const id = jobId(detailJob);
+      if (!id) return;
+      setInlineError(null);
+      try {
+        const payload = await requestJson<{ result?: string }>(
+          cfg.API_BASE_URL,
+          `/api/v1/jobs/${id}/result?format=${format}`,
+        );
+        const ext = format === 'json' ? 'json' : format === 'csv' ? 'csv' : format === 'markdown' ? 'md' : 'txt';
+        const mime =
+          format === 'json'
+            ? 'application/json;charset=utf-8'
+            : format === 'csv'
+              ? 'text/csv;charset=utf-8'
+              : format === 'markdown'
+                ? 'text/markdown;charset=utf-8'
+                : 'text/plain;charset=utf-8';
+        downloadTextFile(`sql-agent-${id}.${ext}`, payload.result ?? '', mime);
+      } catch (error) {
+        setInlineError(error instanceof Error ? error.message : String(error));
+      }
+    },
+    [cfg.API_BASE_URL, detailJob],
   );
 
   React.useEffect(() => {
@@ -445,6 +479,16 @@ export function JobsPage() {
         sortable: true,
         sortValue: jobId,
       },
+      {
+        id: 'question',
+        header: 'Question',
+        cell: (row) => {
+          const text = str(row.question);
+          return <span className="block max-w-[22rem] truncate" title={text}>{text}</span>;
+        },
+        sortable: true,
+        sortValue: (row) => str(row.question),
+      },
       { id: 'type', header: 'Type', cell: (row) => jobType(row), sortable: true, sortValue: jobType },
       {
         id: 'status',
@@ -514,7 +558,7 @@ export function JobsPage() {
         header: 'Log link',
         cell: (row) => {
           const id = jobId(row);
-          return id ? <a className="text-primary underline-offset-4 hover:underline" href={`/logs?job_id=${encodeURIComponent(id)}`}>Logs</a> : '';
+          return id ? <a className="text-primary underline-offset-4 hover:underline" href={`/audit-log?job_id=${encodeURIComponent(id)}`}>Logs</a> : '';
         },
         sortable: true,
         sortValue: jobId,
@@ -706,6 +750,50 @@ export function JobsPage() {
                   Delete
                 </Button>
               ) : null}
+            </div>
+
+            {/* W28A #25-02: result download affordances (JSON / ASCII / CSV / Markdown). */}
+            <div className="flex flex-wrap gap-2" aria-label="Download job result">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                data-testid="job-download-json"
+                disabled={!DOWNLOADABLE_STATUSES.has(detailStatus)}
+                onClick={() => void downloadJobResult('json')}
+              >
+                Download JSON
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                data-testid="job-download-ascii"
+                disabled={!DOWNLOADABLE_STATUSES.has(detailStatus)}
+                onClick={() => void downloadJobResult('table')}
+              >
+                Download ASCII
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                data-testid="job-download-csv"
+                disabled={!DOWNLOADABLE_STATUSES.has(detailStatus)}
+                onClick={() => void downloadJobResult('csv')}
+              >
+                Download CSV
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                data-testid="job-download-markdown"
+                disabled={!DOWNLOADABLE_STATUSES.has(detailStatus)}
+                onClick={() => void downloadJobResult('markdown')}
+              >
+                Download Markdown
+              </Button>
             </div>
 
             <Tabs value={detailTab} onValueChange={setDetailTab}>

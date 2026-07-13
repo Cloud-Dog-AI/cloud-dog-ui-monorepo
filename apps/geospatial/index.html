@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Cloud-Dog Geospatial MCP</title>
+    <script>
+      // geospatial-mcp-server is served by its own web tier on the same origin: the SPA talks to
+      // /api (cookie->identity-header bridge) and /auth/* (cookie session). The web tier
+      // does not serve a separate /runtime-config.js (it 404s dotted paths), so the
+      // runtime config is inlined here. API_BASE_URL is a full URL (origin + /api) so
+      // @cloud-dog/auth's `new URL(loginPath, apiBaseUrl)` resolves /auth/* to the origin.
+      // W28F-910-R1: API_KEY_HEADER intentionally omitted from runtime config.
+      // The chart-mcp WebUI uses AUTH_MODE="cookie" — the SPA never sets X-API-Key
+      // itself (the web tier proxies cookie -> API key server-side). Emitting
+      // API_KEY_HEADER triggered the @cloud-dog/config secret heuristic warning on
+      // every page-load. The Zod schema's .default("X-API-Key") in routes/App.tsx
+      // still supplies the value internally for any code path that reads
+      // cfg.API_KEY_HEADER. Mirrors the W28A-727-R5 chat-client / db-mcp pattern.
+      window.__RUNTIME_CONFIG__ = {
+        ENV: "production",
+        API_BASE_URL: window.location.origin + "/api",
+        AUTH_MODE: "cookie",
+        APP_VERSION: "0.1.0"
+      };
+    </script>
+  </head>
+  <body class="bg-white dark:bg-neutral-950">
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

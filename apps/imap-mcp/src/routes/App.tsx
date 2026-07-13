@@ -37,7 +37,7 @@ import {
 } from "lucide-react";
 import { BaseRuntimeConfigSchema, ConfigProvider, useConfig } from "@cloud-dog/config";
 import { AuthProvider, LoginPage, SessionTimeoutProvider, useAuth } from "@cloud-dog/auth";
-import { AboutDialog, CopyrightFooter, ProfileDialog, ServiceStatusBar, ShellLayout } from "@cloud-dog/shell";
+import { AboutDialog, AboutPage, CopyrightFooter, ProfileDialog, ServiceStatusBar, ShellLayout } from "@cloud-dog/shell";
 import type { NavItemType, ServiceStatus } from "@cloud-dog/shell";
 import { manifest } from "./manifest";
 import { AppStateProvider, useImapMcpState } from "../state/AppState";
@@ -49,20 +49,25 @@ import { McpToolsPage } from "../views/McpToolsPage";
 import { A2aConsolePage } from "../views/A2aConsolePage";
 import { DiagnosticsAuditPage } from "../views/AuditLogPage";
 import { SettingsPage } from "../views/SettingsPage";
-import { AdminUsersPage } from "../views/AdminUsersPage";
-import { AdminGroupsPage } from "../views/AdminGroupsPage";
-import { AdminApiKeysPage } from "../views/AdminApiKeysPage";
-import { AdminRbacPage } from "../views/AdminRbacPage";
+import {
+  IdamUsersPage,
+  IdamGroupsPage,
+  IdamApiKeysPage,
+  IdamRolesPage,
+  IdamRbacPage,
+  setIdamTransportAuth,
+} from "@cloud-dog/idam";
 import { JobsPage } from "../views/JobsPage";
 import { ApiDocsPage } from "../views/ApiDocsPage";
 import { MailboxWorkspacePage } from "../views/FileBrowserPage";
 import { GmailSettingsPage } from "../views/GmailSettingsPage";
+import { WatchesPage } from "../views/WatchesPage";
 
 const AppRuntimeConfigSchema = BaseRuntimeConfigSchema.extend({
   AUTH_MODE: z.enum(["api_key", "cookie", "oidc"]).default("cookie"),
   MCP_BASE_URL: z.string().url().optional(),
   A2A_BASE_URL: z.string().url().optional(),
-  UI_BASE_PATH: z.string().default("/ui"),
+  UI_BASE_PATH: z.string().default(""),
   CLOUD_DOG_SESSION_TIMEOUT_MINUTES: z.coerce.number().int().positive().default(30),
 });
 
@@ -74,11 +79,16 @@ function ShellApp() {
   const loc = useLocation();
   const navigate = useNavigate();
   const auth = useAuth();
+  // W28A-876: feed the active API key into the shared IDAM transport (api_key mode).
+  setIdamTransportAuth({ apiKey: auth.getAccessToken?.() ?? null });
   const cfg = useConfig<AppRuntimeConfig>();
   const app = useImapMcpState();
 
   const [loginDraft, setLoginDraft] = React.useState(app.apiKey);
   const [version, setVersion] = React.useState("");
+  // W28E-1863 fix-wave-d (WSC-014 / PS-30 UI-R7.3): container build provenance for
+  // the shared @cloud-dog/shell AboutPage (from the live /version payload).
+  const [buildIdentity, setBuildIdentity] = React.useState<{ commitHash?: string; buildDate?: string }>({});
   const [profileOpen, setProfileOpen] = React.useState(false);
   const [aboutOpen, setAboutOpen] = React.useState(false);
   const [services, setServices] = React.useState<ServiceStatus[]>(() => [
@@ -137,10 +147,20 @@ function ShellApp() {
       const result = await app.api.getVersion();
       if (!result.ok || !result.data) return;
       setVersion(String(result.data.version ?? result.data.app_version ?? ""));
+      const commitHash = String(result.data.source_commit ?? result.data.commit ?? "").trim();
+      const buildDate = String(result.data.build_date ?? "").trim();
+      setBuildIdentity({
+        commitHash: commitHash || undefined,
+        buildDate: buildDate || undefined,
+      });
     };
     void loadVersion();
   }, [app.api, auth.isAuthenticated]);
 
+  // PS-WEBUI-URL-CANONICAL v1.0 (W28E-1803C): canonical nav paths only — Admin
+  // under /admin/*, Developer under /developer/*, System under /system/*,
+  // Audit-Log at /audit-log. Legacy paths 308-redirect server-side and via the
+  // in-app alias routes below.
   const navItems: NavItemType[] = [
     {
       label: "IMAP MCP",
@@ -150,8 +170,8 @@ function ShellApp() {
         { label: "Dashboard", path: "/", icon: navIcon(LayoutDashboard) },
         { label: "Channels", path: "/profiles", icon: navIcon(HardDrive) },
         { label: "Mailbox Workspace", path: "/mailbox-workspace", icon: navIcon(Folder) },
-        { label: "Mailbox", path: "/search-retrieve", icon: navIcon(Search) },
-        { label: "Audit & Log", path: "/diagnostics-audit", icon: navIcon(ClipboardList) },
+        { label: "Search", path: "/search", icon: navIcon(Search) },
+        { label: "Audit & Log", path: "/audit-log", icon: navIcon(ClipboardList) },
       ],
     },
     {
@@ -162,28 +182,30 @@ function ShellApp() {
         { label: "Users", path: "/admin/users", icon: navIcon(Users) },
         { label: "Groups", path: "/admin/groups", icon: navIcon(Users) },
         { label: "API Keys", path: "/admin/api-keys", icon: navIcon(Key) },
+        { label: "Roles", path: "/admin/roles", icon: navIcon(Shield) },
         { label: "RBAC", path: "/admin/rbac", icon: navIcon(Shield) },
       ],
     },
     {
       label: "Developer",
-      path: "/api-docs",
+      path: "/developer/api-docs",
       icon: navIcon(Wrench),
       children: [
-        { label: "API Docs", path: "/api-docs", icon: navIcon(FileText) },
-        { label: "MCP Console", path: "/mcp-console", icon: navIcon(Terminal) },
-        { label: "A2A Console", path: "/a2a-console", icon: navIcon(Radio) },
+        { label: "API Docs", path: "/developer/api-docs", icon: navIcon(FileText) },
+        { label: "MCP Console", path: "/developer/mcp-console", icon: navIcon(Terminal) },
+        { label: "A2A Console", path: "/developer/a2a-console", icon: navIcon(Radio) },
       ],
     },
     {
       label: "System",
-      path: "/jobs",
+      path: "/system/jobs",
       icon: navIcon(Activity),
       children: [
-        { label: "Jobs", path: "/jobs", icon: navIcon(Layers) },
-        { label: "Settings", path: "/settings", icon: navIcon(Settings) },
-        { label: "Gmail Settings", path: "/gmail-settings", icon: navIcon(Key) },
-        { label: "About", path: "#about", icon: navIcon(Info), onSelect: () => setAboutOpen(true) },
+        { label: "Jobs", path: "/system/jobs", icon: navIcon(Layers) },
+        { label: "Change Watches", path: "/system/watches", icon: navIcon(Radio) },
+        { label: "Settings", path: "/system/settings", icon: navIcon(Settings) },
+        { label: "Gmail Settings", path: "/system/gmail-settings", icon: navIcon(Key) },
+        { label: "About", path: "/system/about", icon: navIcon(Info) },
       ],
     },
   ];
@@ -233,7 +255,7 @@ function ShellApp() {
         email: auth.user?.email,
         onProfile: () => setProfileOpen(true),
         onLogout,
-        onSettings: () => navigate("/settings"),
+        onSettings: () => navigate("/system/settings"),
       }}
     >
       <TopBarActions version={version} onLogout={onLogout} />
@@ -242,33 +264,84 @@ function ShellApp() {
         open={aboutOpen}
         onOpenChange={setAboutOpen}
         productName={manifest.appName}
+        description="IMAP mailbox administration, search/retrieve, MCP tooling, and operational audit console."
+        companyName="Viewdeck Engineering Limited"
+        websiteUrl="https://cloud-dog.net"
         version={version}
       />
       <ServiceStatusBar services={services} />
       <div className="space-y-6">
         <Routes>
+          {/* Canonical routes (PS-WEBUI-URL-CANONICAL v1.0). */}
           <Route path="/" element={<DashboardPage />} />
           <Route path="/login" element={<Navigate to="/" replace />} />
-          <Route path="/dashboard" element={<Navigate to="/" replace />} />
           <Route path="/profiles" element={<ProfilesPage />} />
+          <Route path="/source-connections" element={<Navigate to="/profiles" replace />} />
           <Route path="/mailbox-workspace" element={<MailboxWorkspacePage />} />
-          <Route path="/search-retrieve" element={<SearchRetrievePage />} />
-          <Route path="/jobs" element={<JobsPage />} />
-          <Route path="/mcp-console" element={<McpToolsPage />} />
-          <Route path="/a2a-console" element={<A2aConsolePage />} />
-          <Route path="/diagnostics-audit" element={<DiagnosticsAuditPage />} />
+          <Route path="/search" element={<SearchRetrievePage />} />
           <Route path="/audit-log" element={<DiagnosticsAuditPage />} />
-          <Route path="/api-docs" element={<ApiDocsPage />} />
-          <Route path="/admin/users" element={<AdminUsersPage />} />
-          <Route path="/admin/groups" element={<AdminGroupsPage />} />
-          <Route path="/admin/api-keys" element={<AdminApiKeysPage />} />
-          <Route path="/admin/rbac" element={<AdminRbacPage />} />
+          {/* Admin (shared @cloud-dog/idam components, W28A-876). */}
+          <Route path="/admin/users" element={<IdamUsersPage apiBaseUrl="/webapi" />} />
+          <Route path="/admin/groups" element={<IdamGroupsPage apiBaseUrl="/webapi" />} />
+          <Route path="/admin/api-keys" element={<IdamApiKeysPage apiBaseUrl="/webapi" />} />
+          <Route path="/admin/roles" element={<IdamRolesPage apiBaseUrl="/webapi" />} />
+          <Route path="/admin/rbac" element={<IdamRbacPage apiBaseUrl="/webapi" />} />
+          {/* Developer. */}
+          <Route path="/developer/api-docs" element={<ApiDocsPage />} />
+          <Route path="/developer/mcp-console" element={<McpToolsPage />} />
+          <Route path="/developer/a2a-console" element={<A2aConsolePage />} />
+          {/* System. */}
+          <Route path="/system/jobs" element={<JobsPage />} />
+          {/* W28E-1870-D: mail change-watch page (PS-102 §10); /watches -> canonical */}
+          <Route path="/system/watches" element={<WatchesPage />} />
+          <Route path="/watches" element={<Navigate to="/system/watches" replace />} />
+          <Route path="/system/settings" element={<SettingsPage />} />
+          <Route path="/system/gmail-settings" element={<GmailSettingsPage />} />
+          <Route
+            path="/system/about"
+            element={
+              <AboutPage
+                productName={manifest.appName}
+                version={version}
+                commitHash={buildIdentity.commitHash}
+                buildDate={buildIdentity.buildDate}
+                extra={
+                  <button
+                    type="button"
+                    onClick={() => setAboutOpen(true)}
+                    className="inline-flex items-center rounded-md border px-3 py-1.5 text-sm font-medium hover:bg-muted"
+                  >
+                    View build &amp; deployment details
+                  </button>
+                }
+              />
+            }
+          />
+          {/* Legacy in-app aliases -> canonical (defense in depth; the backend
+              also 308-redirects these on hard navigation). */}
+          <Route path="/dashboard" element={<Navigate to="/" replace />} />
+          <Route path="/audit" element={<Navigate to="/audit-log" replace />} />
+          <Route path="/search-retrieve" element={<Navigate to="/search" replace />} />
+          <Route path="/diagnostics-audit" element={<Navigate to="/audit-log" replace />} />
+          <Route path="/observability" element={<Navigate to="/audit-log" replace />} />
+          <Route path="/logs" element={<Navigate to="/audit-log" replace />} />
+          <Route path="/legacy-diagnostics" element={<Navigate to="/audit-log" replace />} />
+          <Route path="/idam/users" element={<Navigate to="/admin/users" replace />} />
+          <Route path="/idam/groups" element={<Navigate to="/admin/groups" replace />} />
+          <Route path="/idam/api-keys" element={<Navigate to="/admin/api-keys" replace />} />
+          <Route path="/idam/roles" element={<Navigate to="/admin/roles" replace />} />
+          <Route path="/idam/rbac" element={<Navigate to="/admin/rbac" replace />} />
           <Route path="/admin-control" element={<Navigate to="/admin/users" replace />} />
-          <Route path="/legacy-diagnostics" element={<Navigate to="/diagnostics-audit" replace />} />
-          <Route path="/mutation-gating" element={<Navigate to="/" replace />} />
-          <Route path="/settings" element={<SettingsPage />} />
-          <Route path="/gmail-settings" element={<GmailSettingsPage />} />
           <Route path="/admin" element={<Navigate to="/admin/users" replace />} />
+          <Route path="/api-docs" element={<Navigate to="/developer/api-docs" replace />} />
+          <Route path="/docs" element={<Navigate to="/developer/api-docs" replace />} />
+          <Route path="/openapi" element={<Navigate to="/developer/api-docs" replace />} />
+          <Route path="/mcp-console" element={<Navigate to="/developer/mcp-console" replace />} />
+          <Route path="/a2a-console" element={<Navigate to="/developer/a2a-console" replace />} />
+          <Route path="/jobs" element={<Navigate to="/system/jobs" replace />} />
+          <Route path="/settings" element={<Navigate to="/system/settings" replace />} />
+          <Route path="/gmail-settings" element={<Navigate to="/system/gmail-settings" replace />} />
+          <Route path="/about" element={<Navigate to="/system/about" replace />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
         <CopyrightFooter />

@@ -16,8 +16,10 @@
 // Covers: UI-R1
 
 import * as React from 'react';
-import { Badge, Button, Card, CardContent, CardHeader, DataTable, Input, Label, RelativeTime, Select } from '@cloud-dog/ui';
+import { Link } from 'react-router-dom';
+import { Badge, Button, Card, CardContent, CardHeader, DataTable, Input, Label, RelativeTime, Select, createDataTableActionColumn } from '@cloud-dog/ui';
 import type { BulkAction, DataColumn } from '@cloud-dog/ui';
+import { FileText, RefreshCw, Ban, Trash2 } from 'lucide-react';
 import { useNotificationAgentState } from '../state/AppState';
 import type { DeliveryRecord } from '../lib/api';
 
@@ -152,7 +154,17 @@ export function DeliveriesPage() {
       header: 'ID',
       sortable: true,
       sortValue: (delivery) => delivery.id,
-      cell: (delivery) => <span className="font-medium">{delivery.id}</span>,
+      // CX-103: first identifier column — link opens the delivery detail filtered view.
+      cell: (delivery) => (
+        <Link
+          to={`/deliveries?id=${delivery.id}`}
+          className="text-primary underline-offset-4 hover:underline"
+          aria-label={`View delivery ${delivery.id}`}
+          onClick={(e) => { e.preventDefault(); }}
+        >
+          {delivery.id}
+        </Link>
+      ),
     },
     {
       id: 'message_id',
@@ -201,17 +213,40 @@ export function DeliveriesPage() {
       header: 'Error',
       cell: (delivery) => delivery.error ?? '',
     },
-    {
-      id: 'actions',
-      header: 'Actions',
-      cell: (delivery) => (
-        <div className="flex flex-wrap gap-2">
-          <Button variant="secondary" disabled={!canRetryDelivery(delivery.state)} onClick={() => void resendDeliveries([delivery])}>Resend delivery</Button>
-          <Button variant="secondary" disabled={!canAbortDelivery(delivery.state)} onClick={() => void abortDelivery(delivery)}>Abort delivery</Button>
-          <Button variant="secondary" onClick={() => void deleteDeliveries([delivery])}>Delete delivery</Button>
-        </div>
-      ),
-    },
+    // CX-102 / CX-104: shared action-cell helper (Resend, Abort, Log, Delete).
+    // NA-DV-01: shared DataTableAction.disabled is typed `(row) => boolean` —
+    // pre-existing code passed a raw boolean which caused a runtime render
+    // error and the blank-page that UAT reported. Wrap as a function.
+    createDataTableActionColumn<DeliveryRecord>((delivery) => [
+      {
+        id: 'resend',
+        label: 'Resend',
+        icon: <RefreshCw className="h-4 w-4" />,
+        disabled: () => !canRetryDelivery(delivery.state),
+        onClick: () => void resendDeliveries([delivery]),
+      },
+      {
+        id: 'abort',
+        label: 'Abort',
+        icon: <Ban className="h-4 w-4" />,
+        disabled: () => !canAbortDelivery(delivery.state),
+        onClick: () => void abortDelivery(delivery),
+      },
+      {
+        id: 'log',
+        label: 'Log',
+        icon: <FileText className="h-4 w-4" />,
+        href: () => `/diagnostics-audit?actor=${encodeURIComponent(String(delivery.destination ?? delivery.id))}`,
+        title: () => `View audit log for delivery ${delivery.id}`,
+      },
+      {
+        id: 'delete',
+        label: 'Delete',
+        icon: <Trash2 className="h-4 w-4" />,
+        destructive: true,
+        onClick: () => void deleteDeliveries([delivery]),
+      },
+    ]),
   ], [abortDelivery, deleteDeliveries, resendDeliveries]);
 
   const bulkActions = React.useMemo<BulkAction[]>(() => [
@@ -316,6 +351,11 @@ export function DeliveriesPage() {
             bulkActions={bulkActions}
             onBulkAction={onBulkAction}
             columnPickerEnabled={true}
+            emptyMessage={
+              messageFilter || channelFilter || destinationFilter || textFilter || stateFilter
+                ? 'No deliveries match the active filters.'
+                : 'No deliveries recorded yet.'
+            }
           />
         </CardContent>
       </Card>

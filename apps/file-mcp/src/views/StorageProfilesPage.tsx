@@ -43,6 +43,7 @@ import { useFileMcpState } from "../state/AppState";
 type ProfileFormValues = Readonly<{
   name: string;
   display_name: string;
+  description: string;
   backend: string;
   root: string;
   // S3
@@ -70,6 +71,7 @@ type ProfileFormValues = Readonly<{
 const EMPTY_FORM: ProfileFormValues = {
   name: "",
   display_name: "",
+  description: "",
   backend: "local",
   root: "",
   s3_endpoint: "", s3_bucket: "", s3_region: "", s3_access_key: "", s3_secret_key: "",
@@ -81,6 +83,7 @@ const EMPTY_FORM: ProfileFormValues = {
 const BASE_FIELDS: EntityFieldDef[] = [
   { name: "name", label: "Profile name", type: "text", required: true },
   { name: "display_name", label: "Display name", type: "text" },
+  { name: "description", label: "Description", type: "text" },
   {
     name: "backend",
     label: "Backend type",
@@ -134,6 +137,7 @@ type ProfileRow = Readonly<{
   id: string;
   name: string;
   displayName: string;
+  description: string;
   backend: string;
   root: string;
   apiKeysCount: number;
@@ -175,6 +179,7 @@ function toFormValues(profile: AdminProfile): ProfileFormValues {
   return {
     name: profile.name,
     display_name: profile.display_name || profile.name,
+    description: profile.description || strOf(prof.description),
     backend: profile.backend,
     root: profile.roots[0] || "",
     s3_endpoint: strOf(s3.endpoint), s3_bucket: strOf(s3.bucket), s3_region: strOf(s3.region),
@@ -256,6 +261,7 @@ export function StorageProfilesPage() {
         id: profile.name,
         name: profile.name,
         displayName: profile.display_name || profile.name,
+        description: profile.description || strOf(asObj(profile.profile).description),
         backend: profile.backend,
         root: profile.roots[0] || "",
         apiKeysCount: profile.api_keys_count,
@@ -282,7 +288,7 @@ export function StorageProfilesPage() {
     const visible = showTemplates ? rows : rows.filter((r) => !isTemplateRow(r));
     if (!trimmed) return visible;
     return visible.filter((row) =>
-      `${row.name} ${row.displayName} ${row.backend} ${row.root} ${row.status} ${row.reason}`
+      `${row.name} ${row.displayName} ${row.description} ${row.backend} ${row.root} ${row.status} ${row.reason}`
         .toLowerCase()
         .includes(trimmed)
     );
@@ -381,12 +387,15 @@ export function StorageProfilesPage() {
       backendConfig.google_drive = gd;
     }
 
+    const description = formValues.description.trim();
     const profilePayload = {
       name,
       display_name: formValues.display_name.trim() || name,
+      description,
       backend: formValues.backend,
       root,
       profile: {
+        description,
         storage: { backend: formValues.backend, ...backendConfig },
         scope: { roots: [root] },
       },
@@ -686,6 +695,7 @@ export function StorageProfilesPage() {
               <div className="grid gap-x-8 gap-y-2 sm:grid-cols-2 text-sm">
                 <div><span className="font-medium">Name:</span> {detailRow.name}</div>
                 <div><span className="font-medium">Display Name:</span> {detailRow.displayName || "(none)"}</div>
+                <div className="sm:col-span-2"><span className="font-medium">Description:</span> {detailRow.description || "(none)"}</div>
                 <div><span className="font-medium">Backend:</span> {detailRow.backend}</div>
                 <div><span className="font-medium">Root:</span> <code className="text-xs">{detailRow.root || "(none)"}</code></div>
                 <div><span className="font-medium">Status:</span> <Badge variant={statusVariant(detailRow.status)}>{detailRow.status}</Badge></div>

@@ -35,8 +35,11 @@ test('ui-review2 users table exposes page jump and column picker controls', asyn
   await expect(page.getByText(/^page$/i)).toBeVisible();
   await page.getByRole('button', { name: /^columns$/i }).first().click();
   await expect(page.getByText(/visible columns/i)).toBeVisible();
-  await page.getByLabel(/show display name/i).uncheck();
-  await expect(page.getByRole('columnheader', { name: /display name/i })).toHaveCount(0);
+  // The Users table renders via the shared @cloud-dog/idam UsersPage, whose column
+  // header (and hence the column-picker "Show <header>" label) is the field id
+  // `display_name`. Assert the column picker hides that shipped column.
+  await page.getByLabel(/show display_name/i).uncheck();
+  await expect(page.getByRole('columnheader', { name: /^display_name$/i })).toHaveCount(0);
 });
 
 test('ui-review2 jobs page shows shared jobs surface and structured detail', async ({ page }) => {
@@ -66,5 +69,7 @@ test('ui-review2 api docs page renders embedded docs and links', async ({ page }
   await page.getByRole('link', { name: /^api docs$/i }).click();
   await expect(page.getByRole('heading', { level: 1, name: /^api docs$/i })).toBeVisible();
   await expect(page.getByRole('link', { name: /openapi json/i })).toBeVisible();
-  await expect(page.locator('iframe[title="API documentation"]')).toBeVisible();
+  // The shipped API reference embeds SwaggerUI (shared @cloud-dog/ui ApiDocsPanel,
+  // default mode) rather than a raw <iframe>; assert the embedded OpenAPI surface.
+  await expect(page.locator('[data-testid="api-docs-openapi-swagger"]')).toBeVisible();
 });

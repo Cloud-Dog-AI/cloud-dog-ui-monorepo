@@ -33,26 +33,6 @@ type AppState = Readonly<{
 
 const AppStateContext = React.createContext<AppState | null>(null);
 
-function resolveLocalCookieApiBase(configuredBaseUrl: string): string {
-  if (typeof window === 'undefined') return configuredBaseUrl;
-  try {
-    const configured = new URL(configuredBaseUrl);
-    const current = new URL(window.location.origin);
-    const localHostnames = new Set(['localhost', '127.0.0.1', '::1']);
-    if (
-      configured.protocol === current.protocol &&
-      localHostnames.has(configured.hostname) &&
-      localHostnames.has(current.hostname) &&
-      configured.host !== current.host
-    ) {
-      return window.location.origin;
-    }
-  } catch {
-    return configuredBaseUrl;
-  }
-  return configuredBaseUrl;
-}
-
 function formatError(error: unknown): string {
   if (error instanceof Error && error.message.trim()) return error.message;
   if (typeof error === 'string' && error.trim()) return error;
@@ -77,8 +57,7 @@ export function AppStateProvider(props: { children: React.ReactNode }) {
     return message;
   }, [auth]);
 
-  const apiBaseUrl = React.useMemo(() => resolveLocalCookieApiBase(cfg.API_BASE_URL), [cfg.API_BASE_URL]);
-  const api = React.useMemo(() => createNotificationAdminApi(apiBaseUrl), [apiBaseUrl]);
+  const api = React.useMemo(() => createNotificationAdminApi(cfg.API_BASE_URL), [cfg.API_BASE_URL]);
 
   const value: AppState = {
     api,

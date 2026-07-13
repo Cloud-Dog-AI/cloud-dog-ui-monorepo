@@ -20,6 +20,7 @@ import { z } from "zod";
 import {
   Activity,
   ClipboardList,
+  Eye,
   FileText,
   FolderOpen,
   GitBranch,
@@ -38,10 +39,9 @@ import {
 } from "lucide-react";
 import { BaseRuntimeConfigSchema, ConfigProvider, useConfig } from "@cloud-dog/config";
 import { AuthProvider, LoginPage, SessionTimeoutProvider, useAuth } from "@cloud-dog/auth";
-import { AboutDialog, CopyrightFooter, ServiceStatusBar, ShellLayout, VersionInfo } from "@cloud-dog/shell";
+import { AboutDialog, AboutPage, CopyrightFooter, ServiceStatusBar, ShellLayout } from "@cloud-dog/shell";
 import type { NavItemType } from "@cloud-dog/shell";
 import {
-  Button,
   Card,
   CardContent,
   CardHeader,
@@ -52,10 +52,10 @@ import { AppStateProvider, useGitMcpState } from "../state/AppState";
 import { getGitRoleAccess } from "../lib/rbac";
 import { DashboardPage } from "../views/DashboardPage";
 import { ProfilesPage } from "../views/ProfilesPage";
-import { UsersPage } from "../views/UsersPage";
-import { GroupsPage } from "../views/GroupsPage";
-import { ApiKeysPage } from "../views/ApiKeysPage";
-import { RbacBindingsPage } from "../views/RbacBindingsPage";
+// IDAM Users/Groups/API-Keys/Roles/RBAC are served exclusively by the shared
+// @cloud-dog/idam components (mounted on /idam/* and /admin/* below). The former
+// bespoke forks were removed in W28A-886 (§1.4 dead-fork cleanup).
+import { WorkspacesPage } from "../views/WorkspacesPage";
 import { WorkspaceDiagnosticsPage } from "../views/WorkspaceDiagnosticsPage";
 import { RecoveryPage } from "../views/RecoveryPage";
 import { McpToolsPage } from "../views/McpToolsPage";
@@ -70,7 +70,16 @@ import { DiffViewerPage } from "../views/DiffViewerPage";
 import { BranchManagerPage } from "../views/BranchManagerPage";
 import { MergePage } from "../views/MergePage";
 import { TagManagerPage } from "../views/TagManagerPage";
+import { WatchesPage } from "../views/WatchesPage";
 import { StashManagerPage } from "../views/StashManagerPage";
+import {
+  IdamUsersPage,
+  IdamGroupsPage,
+  IdamApiKeysPage,
+  IdamRolesPage,
+  IdamRbacPage,
+  setIdamTransportAuth,
+} from "@cloud-dog/idam";
 
 const AppRuntimeConfigSchema = BaseRuntimeConfigSchema.extend({
   AUTH_MODE: z.enum(["api_key", "cookie", "oidc"]).default("api_key"),
@@ -102,6 +111,8 @@ function ShellApp() {
   const location = useLocation();
   const navigate = useNavigate();
   const auth = useAuth();
+  // W28A-876: feed the active API key into the shared IDAM transport (api_key mode).
+  setIdamTransportAuth({ apiKey: auth.getAccessToken?.() ?? null });
   const cfg = useConfig<AppRuntimeConfig>();
   const app = useGitMcpState();
 
@@ -115,6 +126,10 @@ function ShellApp() {
   React.useEffect(() => {
     document.title = manifest.appName;
   }, []);
+
+  // W28E-1845: the "About" nav points at the navigable canonical /system/about page route
+  // (shared @cloud-dog/shell AboutPage); /about 308-redirects there. The AboutDialog modal is
+  // retained as a supplementary quick-view (opened via setAboutOpen, not via the /about route).
 
   React.useEffect(() => {
     setLoginDraft(app.apiKey);
@@ -155,8 +170,9 @@ function ShellApp() {
   const gitChildren: NavItemType[] = [
     { label: "Dashboard", path: "/", icon: navIcon(LayoutDashboard) },
     ...(access.canManageProfiles ? [{ label: "Profiles", path: "/profiles", icon: navIcon(FolderOpen) }] : []),
+    { label: "Workspaces", path: "/workspaces", icon: navIcon(Layers) },
     { label: "Workspace", path: "/workspace", icon: navIcon(GitBranch) },
-    { label: "Browser", path: "/repository", icon: navIcon(FolderOpen) },
+    { label: "Catalogue", path: "/catalogue", icon: navIcon(FolderOpen) },
     { label: "Commits", path: "/history", icon: navIcon(ClipboardList) },
     { label: "Diff", path: "/diff", icon: navIcon(Activity) },
     { label: "Branches", path: "/branches", icon: navIcon(GitBranch) },
@@ -164,7 +180,7 @@ function ShellApp() {
     { label: "Tags", path: "/tags", icon: navIcon(Tag) },
     { label: "Stashes", path: "/stashes", icon: navIcon(Layers) },
     { label: "Recovery", path: "/recovery", icon: navIcon(RefreshCcw) },
-    { label: "Audit Log", path: "/audit", icon: navIcon(ClipboardList) },
+    { label: "Audit Log", path: "/audit-log", icon: navIcon(ClipboardList) },
   ];
 
   const navItems: NavItemType[] = [
@@ -182,27 +198,29 @@ function ShellApp() {
         { label: "Users", path: "/admin/users", icon: navIcon(Users) },
         { label: "Groups", path: "/admin/groups", icon: navIcon(Users) },
         { label: "API Keys", path: "/admin/api-keys", icon: navIcon(Key) },
+        { label: "Roles", path: "/admin/roles", icon: navIcon(Shield) },
         { label: "RBAC", path: "/admin/rbac", icon: navIcon(Shield) },
       ],
     }] : []),
     {
       label: "Developer",
-      path: "/api-docs",
+      path: "/developer/api-docs",
       icon: navIcon(Wrench),
       children: [
-        { label: "API Docs", path: "/api-docs", icon: navIcon(FileText) },
-        { label: "MCP Console", path: "/mcp-console", icon: navIcon(Terminal) },
-        { label: "A2A Console", path: "/a2a-console", icon: navIcon(Radio) },
+        { label: "API Docs", path: "/developer/api-docs", icon: navIcon(FileText) },
+        { label: "MCP Console", path: "/developer/mcp-console", icon: navIcon(Terminal) },
+        { label: "A2A Console", path: "/developer/a2a-console", icon: navIcon(Radio) },
       ],
     },
     {
       label: "System",
-      path: "/jobs",
+      path: "/system/jobs",
       icon: navIcon(Activity),
       children: [
-        { label: "Jobs", path: "/jobs", icon: navIcon(Layers) },
-        { label: "Settings", path: "/settings", icon: navIcon(Settings) },
-        { label: "About", path: "/about", icon: navIcon(Info) },
+        { label: "Jobs", path: "/system/jobs", icon: navIcon(Layers) },
+        { label: "Change Watches", path: "/system/watches", icon: navIcon(Eye) },
+        { label: "Settings", path: "/system/settings", icon: navIcon(Settings) },
+        { label: "About", path: "/system/about", icon: navIcon(Info) },
       ],
     },
   ];
@@ -250,35 +268,40 @@ function ShellApp() {
         displayName: auth.user?.displayName ?? "API key",
         email: auth.user?.email,
         onLogout,
-        onSettings: () => navigate("/settings"),
+        onSettings: () => navigate("/system/settings"),
       }}
     >
       <div className="space-y-6">
         <span className="sr-only" aria-label="Session timeout active">Session timeout active</span>
         <ServiceStatusBar services={services} />
-        <div className="flex flex-col gap-3 rounded-xl border border-border/70 bg-background/90 px-4 py-3 md:flex-row md:items-center md:justify-between">
-          <VersionInfo
-            version={versionInfo.version}
-            buildDate={versionInfo.buildDate}
-            commitHash={versionInfo.commitHash}
-          />
-          <Button variant="secondary" size="sm" onClick={() => setAboutOpen(true)}>
-            About
-          </Button>
-        </div>
         <Routes>
           <Route path="/" element={<DashboardPage />} />
           <Route path="/login" element={<Navigate to="/" replace />} />
           <Route path="/dashboard" element={<Navigate to="/" replace />} />
           <Route path="/profiles" element={access.canManageProfiles ? <ProfilesPage /> : <RestrictedPage title="Profiles" description="This role cannot manage repository profiles." />} />
-          <Route path="/admin/users" element={access.canAccessAdminPages ? <UsersPage /> : <RestrictedPage title="Users" description="Admin pages are hidden for this role." />} />
-          <Route path="/admin/groups" element={access.canAccessAdminPages ? <GroupsPage /> : <RestrictedPage title="Groups" description="Admin pages are hidden for this role." />} />
-          <Route path="/admin/api-keys" element={access.canAccessAdminPages ? <ApiKeysPage /> : <RestrictedPage title="API Keys" description="Admin pages are hidden for this role." />} />
-          <Route path="/admin/rbac" element={access.canAccessAdminPages ? <RbacBindingsPage /> : <RestrictedPage title="RBAC" description="Admin pages are hidden for this role." />} />
+          {/* PS-71 v2.2 canonical IDAM routes — shared @cloud-dog/idam components (W28E-1838-STD-F03: /admin/* canonical) */}
+          <Route path="/admin/users" element={access.canAccessAdminPages ? <IdamUsersPage apiBaseUrl="/api" /> : <RestrictedPage title="Users" description="Admin pages are hidden for this role." />} />
+          <Route path="/admin/groups" element={access.canAccessAdminPages ? <IdamGroupsPage apiBaseUrl="/api" /> : <RestrictedPage title="Groups" description="Admin pages are hidden for this role." />} />
+          <Route path="/admin/api-keys" element={access.canAccessAdminPages ? <IdamApiKeysPage apiBaseUrl="/api" /> : <RestrictedPage title="API Keys" description="Admin pages are hidden for this role." />} />
+          <Route path="/admin/roles" element={access.canAccessAdminPages ? <IdamRolesPage apiBaseUrl="/api" /> : <RestrictedPage title="Roles" description="Admin pages are hidden for this role." />} />
+          <Route path="/admin/rbac" element={access.canAccessAdminPages ? <IdamRbacPage apiBaseUrl="/api" /> : <RestrictedPage title="RBAC" description="Admin pages are hidden for this role." />} />
+          {/* legacy /idam/* (and /apikeys,/api-keys,/rbac) aliases -> 308/redirect to canonical /admin/* (PS-WEBUI-URL-CANONICAL WURL-ADMIN-*) */}
+          <Route path="/idam/users" element={<Navigate to="/admin/users" replace />} />
+          <Route path="/idam/groups" element={<Navigate to="/admin/groups" replace />} />
+          <Route path="/idam/api-keys" element={<Navigate to="/admin/api-keys" replace />} />
+          <Route path="/idam/roles" element={<Navigate to="/admin/roles" replace />} />
+          <Route path="/idam/rbac" element={<Navigate to="/admin/rbac" replace />} />
+          <Route path="/apikeys" element={<Navigate to="/admin/api-keys" replace />} />
+          <Route path="/api-keys" element={<Navigate to="/admin/api-keys" replace />} />
+          <Route path="/rbac" element={<Navigate to="/admin/rbac" replace />} />
+          {/* W28J: new first-class Workspaces page (conceptual-model surfacing) */}
+          <Route path="/workspaces" element={<WorkspacesPage />} />
+          <Route path="/source-connections" element={<Navigate to="/workspaces" replace />} />
           <Route path="/workspace" element={<WorkspaceDiagnosticsPage />} />
-          <Route path="/repository" element={<RepositoryBrowserPage />} />
-          <Route path="/browser" element={<Navigate to="/repository" replace />} />
-          <Route path="/files" element={<Navigate to="/repository" replace />} />
+          <Route path="/catalogue" element={<RepositoryBrowserPage />} />
+          <Route path="/repository" element={<Navigate to="/catalogue" replace />} />
+          <Route path="/browser" element={<Navigate to="/catalogue" replace />} />
+          <Route path="/files" element={<Navigate to="/catalogue" replace />} />
           <Route path="/history" element={<CommitLogPage />} />
           <Route path="/log" element={<Navigate to="/history" replace />} />
           <Route path="/commits" element={<Navigate to="/history" replace />} />
@@ -289,19 +312,50 @@ function ShellApp() {
           <Route path="/stashes" element={<StashManagerPage />} />
           <Route path="/recovery" element={<RecoveryPage />} />
           <Route path="/audit-recovery" element={<Navigate to="/recovery" replace />} />
-          <Route path="/mcp-console" element={<McpToolsPage />} />
-          <Route path="/a2a-console" element={<A2aConsolePage />} />
-          <Route path="/api-docs" element={<ApiDocsPage />} />
-          <Route path="/jobs" element={<JobsPageView />} />
-          <Route path="/audit" element={<AuditLogPage />} />
-          <Route path="/settings" element={<SettingsPage />} />
+          <Route path="/developer/mcp-console" element={<McpToolsPage />} />
+          <Route path="/mcp-console" element={<Navigate to="/developer/mcp-console" replace />} />
+          <Route path="/developer/a2a-console" element={<A2aConsolePage />} />
+          <Route path="/a2a-console" element={<Navigate to="/developer/a2a-console" replace />} />
+          <Route path="/developer/api-docs" element={<ApiDocsPage />} />
+          <Route path="/api-docs" element={<Navigate to="/developer/api-docs" replace />} />
+          <Route path="/docs" element={<Navigate to="/developer/api-docs" replace />} />
+          <Route path="/openapi" element={<Navigate to="/developer/api-docs" replace />} />
+          <Route path="/system/jobs" element={<JobsPageView />} />
+          <Route path="/jobs" element={<Navigate to="/system/jobs" replace />} />
+          {/* W28E-1870-C: git change-watch page (PS-102 §10). Canonical /system/watches;
+              /watches -> canonical redirect (PS-WEBUI-URL-CANONICAL). */}
+          <Route path="/system/watches" element={<WatchesPage />} />
+          <Route path="/watches" element={<Navigate to="/system/watches" replace />} />
+          <Route path="/audit-log" element={<AuditLogPage />} />
+          <Route path="/audit" element={<Navigate to="/audit-log" replace />} />
+          <Route path="/diagnostics-audit" element={<Navigate to="/audit-log" replace />} />
+          <Route path="/observability" element={<Navigate to="/audit-log" replace />} />
+          <Route path="/logs" element={<Navigate to="/audit-log" replace />} />
+          <Route path="/system/settings" element={<SettingsPage />} />
+          <Route path="/settings" element={<Navigate to="/system/settings" replace />} />
+          {/* W28E-1845 / PS-WEBUI-URL-CANONICAL §11: canonical /system/about renders the
+              shared @cloud-dog/shell AboutPage; the About copy from the AboutDialog modal is
+              preserved here verbatim (no-loss). The /about alias 308-redirects below; the
+              AboutDialog modal is retained as a supplementary quick-view. */}
+          <Route
+            path="/system/about"
+            element={
+              <AboutPage
+                productName={manifest.appName}
+                description="Git repository administration, MCP tooling, and operational audit console."
+                companyName="Viewdeck Engineering Limited"
+                websiteUrl="https://cloud-dog.net"
+                version={versionInfo.version}
+                buildDate={versionInfo.buildDate}
+                commitHash={versionInfo.commitHash}
+              />
+            }
+          />
+          <Route path="/about" element={<Navigate to="/system/about" replace />} />
           <Route path="/admin" element={<Navigate to={access.canAccessAdminPages ? "/admin/rbac" : "/"} replace />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
         <CopyrightFooter />
-        <p className="text-xs text-muted-foreground">
-          Copyright 2026 Cloud-Dog, Viewdeck Engineering Limited
-        </p>
         <AboutDialog
           open={aboutOpen}
           onOpenChange={setAboutOpen}

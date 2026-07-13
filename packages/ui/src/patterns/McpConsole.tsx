@@ -18,15 +18,18 @@ import * as React from "react";
 import { cn } from "../utils/cn";
 import { Button } from "../components/button/Button";
 import { Input } from "../components/input/Input";
-import { Select } from "../components/input/Select";
 import { Textarea } from "../components/input/Textarea";
 import { JsonBlock } from "./JsonBlock";
 import { RelativeTime } from "./RelativeTime";
+import { WorkedExamplePopup } from "./WorkedExamplePopup";
 
 export type McpToolDef = Readonly<{
   name: string;
   description?: string;
   inputSchema?: unknown;
+  exampleInput?: unknown;
+  exampleOutput?: unknown;
+  authNote?: string;
 }>;
 
 type HistoryEntry = Readonly<{
@@ -98,6 +101,7 @@ export function McpConsole(props: McpConsoleProps) {
   const [argsText, setArgsText] = React.useState("{}");
   const [running, setRunning] = React.useState(false);
   const [history, setHistory] = React.useState<HistoryEntry[]>([]);
+  const [exampleOpen, setExampleOpen] = React.useState(false);
 
   const filteredTools = React.useMemo(() => {
     const nextQuery = query.trim().toLowerCase();
@@ -124,7 +128,7 @@ export function McpConsole(props: McpConsoleProps) {
 
   React.useEffect(() => {
     if (!activeTool) return;
-    setArgsText(JSON.stringify(buildArgsTemplate(activeTool), null, 2));
+    setArgsText(JSON.stringify(activeTool.exampleInput ?? buildArgsTemplate(activeTool), null, 2));
   }, [activeTool?.name]);
 
   const execute = async () => {
@@ -159,7 +163,7 @@ export function McpConsole(props: McpConsoleProps) {
           placeholder="Search tools..."
           aria-label="Search tools"
         />
-        <ul className="space-y-1" aria-label="Available tools">
+        <ul className="space-y-1" aria-label="MCP tool list">
           {filteredTools.map((t) => (
             <li key={t.name}>
               <button
@@ -169,6 +173,7 @@ export function McpConsole(props: McpConsoleProps) {
                   t.name === selectedTool ? "bg-primary/10 font-medium" : "",
                 )}
                 onClick={() => setSelectedTool(t.name)}
+                aria-expanded={t.name === selectedTool}
               >
                 {t.name}
               </button>
@@ -185,23 +190,42 @@ export function McpConsole(props: McpConsoleProps) {
         <h2 className="text-sm font-semibold">Tool execution</h2>
         <div className="text-xs text-muted-foreground">{props.endpointUrl}</div>
 
-        <div className="space-y-2">
-          <label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-            Tool Name
-          </label>
-          <Select
-            value={selectedTool}
-            onChange={(e) => setSelectedTool(e.target.value)}
-            aria-label="Select tool"
-          >
-            {props.tools.map((t) => (
-              <option key={t.name} value={t.name}>{t.name}</option>
-            ))}
-          </Select>
-          {activeTool?.description ? (
-            <p className="text-xs text-muted-foreground">{activeTool.description}</p>
-          ) : null}
-        </div>
+        {activeTool ? (
+          <section className="space-y-3 rounded-md border bg-muted/20 p-3" aria-label="MCP tool detail">
+            <div className="flex flex-wrap items-start justify-between gap-2">
+              <div className="min-w-0">
+                <h3 className="font-mono text-sm font-semibold">{activeTool.name}</h3>
+                {activeTool.description ? (
+                  <p className="text-xs text-muted-foreground">{activeTool.description}</p>
+                ) : null}
+                <p className="text-xs text-muted-foreground">{activeTool.authNote ?? "Requires authenticated operator session."}</p>
+              </div>
+              <Button variant="secondary" size="sm" onClick={() => setExampleOpen(true)}>
+                Worked example
+              </Button>
+            </div>
+            <div className="grid gap-3 lg:grid-cols-2">
+              <div>
+                <h4 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Example curl</h4>
+                <pre className="mt-1 max-h-40 overflow-auto rounded border bg-background p-2 text-xs" tabIndex={0}>
+                  {`curl -sk -X POST ${props.endpointUrl} \\\n  -H "Content-Type: application/json" \\\n  -d '${JSON.stringify({ tool: activeTool.name, input: activeTool.exampleInput ?? buildArgsTemplate(activeTool) })}'`}
+                </pre>
+              </div>
+              <div>
+                <h4 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Example output</h4>
+                <pre className="mt-1 max-h-40 overflow-auto rounded border bg-background p-2 text-xs" tabIndex={0}>
+                  {JSON.stringify(activeTool.exampleOutput ?? { ok: true, result: {} }, null, 2)}
+                </pre>
+              </div>
+            </div>
+            <details>
+              <summary className="cursor-pointer text-xs text-primary">Parameter schema</summary>
+              <pre className="mt-1 max-h-52 overflow-auto rounded border bg-background p-2 text-xs" tabIndex={0}>
+                {JSON.stringify(activeTool.inputSchema ?? {}, null, 2)}
+              </pre>
+            </details>
+          </section>
+        ) : null}
 
         <label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
           Parameters (JSON)
@@ -250,6 +274,16 @@ export function McpConsole(props: McpConsoleProps) {
             ))}
           </div>
         ) : null}
+
+        <WorkedExamplePopup
+          open={exampleOpen}
+          onOpenChange={setExampleOpen}
+          title={activeTool?.name ?? "MCP tool"}
+          description={activeTool?.description}
+          exampleInput={activeTool?.exampleInput ?? (activeTool ? buildArgsTemplate(activeTool) : undefined)}
+          exampleOutput={activeTool?.exampleOutput ?? { ok: true, result: {} }}
+          endpointUrl={props.endpointUrl}
+        />
       </div>
     </div>
   );

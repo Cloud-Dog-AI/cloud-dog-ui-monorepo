@@ -24,6 +24,9 @@ export type TimelineMessage = Readonly<{
   content: string;
   timestamp?: string;
   footer?: React.ReactNode;
+  /** Human display name for the header, e.g. the logged-in user's name for
+   *  their own messages (CL-25, W28E-1876). Falls back to the role. */
+  displayName?: string;
 }>;
 
 export type ChatTimelineProps = Readonly<{
@@ -52,6 +55,7 @@ export function ChatTimeline(props: ChatTimelineProps) {
           content={m.content}
           timestamp={m.timestamp}
           footer={m.footer}
+          displayName={m.displayName}
         />
       ))}
     </div>

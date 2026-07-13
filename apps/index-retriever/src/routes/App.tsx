@@ -23,11 +23,14 @@ import {
   Activity,
   Archive,
   Database,
+  FileStack,
   FileText,
   FolderOpen,
   Key,
   Layers,
   LayoutDashboard,
+  LayoutTemplate,
+  Library,
   Radio,
   Search,
   Settings,
@@ -38,6 +41,7 @@ import {
 } from "lucide-react";
 import {
   AboutDialog,
+  AboutPage,
   CopyrightFooter,
   DocLinks,
   ServiceStatusBar,
@@ -50,6 +54,14 @@ import {
   Button,
   Spinner,
 } from "@cloud-dog/ui";
+import {
+  IdamUsersPage,
+  IdamGroupsPage,
+  IdamApiKeysPage,
+  IdamRolesPage,
+  IdamRbacPage,
+  setIdamTransportAuth,
+} from "@cloud-dog/idam";
 import { manifest } from "./manifest";
 import { AppStateProvider, useIndexRetrieverState } from "../state/AppState";
 import { DashboardPage } from "../views/DashboardPage";
@@ -58,20 +70,19 @@ import { CollectionCrudPage } from "../views/CollectionCrudPage";
 import { SourceConfigPage } from "../views/SourceConfigPage";
 import { IngestSearchPage } from "../views/IngestSearchPage";
 import { RetentionDeletePage } from "../views/RetentionDeletePage";
+import { WatchesPage } from "../views/WatchesPage";
 import { ObservabilityPage } from "../views/ObservabilityPage";
 import { McpConsolePage } from "../views/McpConsolePage";
 import { A2aConsolePage } from "../views/A2aConsolePage";
-import { UsersPage } from "../views/UsersPage";
-import { GroupsPage } from "../views/GroupsPage";
-import { ApiKeysPage } from "../views/ApiKeysPage";
-import { RbacPage } from "../views/RbacPage";
 import { SettingsPage } from "../views/SettingsPage";
 import { ApiDocsPage } from "../views/ApiDocsPage";
 import { JobsPageView } from "../views/JobsPageView";
-import { SecurityPage } from "../views/SecurityPage";
+import { StructureDocumentsPage } from "../views/StructureDocumentsPage";
+import { StructureCorporaPage } from "../views/StructureCorporaPage";
+import { StructureTemplatesPage } from "../views/StructureTemplatesPage";
 
 const AppRuntimeConfigSchema = BaseRuntimeConfigSchema.extend({
-  AUTH_MODE: z.enum(["api_key", "cookie", "oidc"]).default("api_key"),
+  AUTH_MODE: z.enum(["api_key", "cookie", "oidc"]).default("cookie"),
   APP_VERSION: z.string().optional(),
   BUILD_DATE: z.string().optional(),
   GIT_COMMIT: z.string().optional(),
@@ -163,15 +174,17 @@ function useServiceStatuses(cfg: AppRuntimeConfig, app: ReturnType<typeof useInd
     let mounted = true;
 
     const check = async () => {
-      const accessToken = auth.getAccessToken()?.trim() || null;
+      const accessToken = auth.getAccessToken()?.trim() || app.apiKey.trim() || null;
       const apiStatus = await app.api
         .getHealth()
         .then(() => "ok" as const)
         .catch(() => "error" as const);
-      const mcpStatus = await probeProtectedEndpoint(
-        withPath(cfg.API_BASE_URL, "/api/v1/tools"),
-        () => accessToken
-      );
+      const mcpStatus = accessToken
+        ? await probeProtectedEndpoint(
+            withPath(cfg.API_BASE_URL, "/api/v1/tools"),
+            () => accessToken
+          )
+        : ("unknown" as const);
       const a2aStatus = accessToken
         ? await app.api.getA2aHealth().then(() => "ok" as const).catch(() => "error" as const)
         : ("unknown" as const);
@@ -212,7 +225,13 @@ function ShellApp() {
 
   React.useEffect(() => {
     setLoginDraft(app.apiKey);
-  }, [app.apiKey]);
+    // W28A-775: complete the shared @cloud-dog/idam adoption — feed the active API key
+    // into the IDAM transport so the shared IDAM pages (Users/Groups/API-Keys/RBAC/Roles)
+    // authenticate in this service's api_key mode (cookie-only auth would 401 the backend).
+    setIdamTransportAuth(
+      cfg.AUTH_MODE === "api_key" ? { apiKey: auth.getAccessToken()?.trim() || app.apiKey || null } : null,
+    );
+  }, [app.apiKey, auth.getAccessToken, cfg.AUTH_MODE]);
 
   const navItems: NavItemType[] = [
     {
@@ -224,9 +243,19 @@ function ShellApp() {
         { label: "Profiles", path: "/profiles", icon: navIcon(FolderOpen) },
         { label: "Collections", path: "/collections", icon: navIcon(Database) },
         { label: "File Ingest", path: "/source-config", icon: navIcon(Wrench) },
-        { label: "Search Retrieve", path: "/ingest-search", icon: navIcon(Search) },
+        { label: "Search", path: "/search", icon: navIcon(Search) },
         { label: "Retention Delete", path: "/retention-delete", icon: navIcon(Archive) },
-        { label: "Observability", path: "/observability", icon: navIcon(Activity) },
+        { label: "Audit Log", path: "/audit-log", icon: navIcon(Activity) },
+      ],
+    },
+    {
+      label: "Document Structure",
+      path: "/structure/documents",
+      icon: navIcon(FileStack),
+      children: [
+        { label: "Structure Documents", path: "/structure/documents", icon: navIcon(FileStack) },
+        { label: "Structure Corpora", path: "/structure/corpora", icon: navIcon(Library) },
+        { label: "Structure Templates", path: "/structure/templates", icon: navIcon(LayoutTemplate) },
       ],
     },
     {
@@ -234,30 +263,31 @@ function ShellApp() {
       path: "/admin/users",
       icon: navIcon(Users),
       children: [
-        { label: "Security Overview", path: "/security", icon: navIcon(Shield) },
         { label: "Users", path: "/admin/users", icon: navIcon(Users) },
         { label: "Groups", path: "/admin/groups", icon: navIcon(Users) },
         { label: "API Keys", path: "/admin/api-keys", icon: navIcon(Key) },
+        { label: "Roles", path: "/admin/roles", icon: navIcon(Shield) },
         { label: "RBAC", path: "/admin/rbac", icon: navIcon(Shield) },
       ],
     },
     {
       label: "Developer",
-      path: "/api-docs",
+      path: "/developer/api-docs",
       icon: navIcon(Wrench),
       children: [
-        { label: "API Docs", path: "/api-docs", icon: navIcon(FileText) },
-        { label: "MCP Console", path: "/mcp-console", icon: navIcon(Terminal) },
-        { label: "A2A Console", path: "/a2a-console", icon: navIcon(Radio) },
+        { label: "API Docs", path: "/developer/api-docs", icon: navIcon(FileText) },
+        { label: "MCP Console", path: "/developer/mcp-console", icon: navIcon(Terminal) },
+        { label: "A2A Console", path: "/developer/a2a-console", icon: navIcon(Radio) },
       ],
     },
     {
       label: "System",
-      path: "/jobs",
+      path: "/system/jobs",
       icon: navIcon(Activity),
       children: [
-        { label: "Jobs", path: "/jobs", icon: navIcon(Layers) },
-        { label: "Settings", path: "/settings", icon: navIcon(Settings) },
+        { label: "Jobs", path: "/system/jobs", icon: navIcon(Layers) },
+        { label: "Change Watches", path: "/system/watches", icon: navIcon(Radio) },
+        { label: "Settings", path: "/system/settings", icon: navIcon(Settings) },
       ],
     },
   ];
@@ -306,7 +336,7 @@ function ShellApp() {
           displayName: auth.user?.displayName ?? "API key",
           email: auth.user?.email,
           onLogout,
-          onSettings: () => navigate("/settings"),
+          onSettings: () => navigate("/system/settings"),
         }}
       >
         <div className="space-y-6">
@@ -317,22 +347,69 @@ function ShellApp() {
             <Route path="/login" element={<Navigate to="/dashboard" replace />} />
             <Route path="/dashboard" element={<DashboardPage />} />
             <Route path="/profiles" element={<ProfileCrudPage />} />
-            <Route path="/security" element={<SecurityPage />} />
+            {/* W28A-734-R2: bespoke /security SecurityAdminSectionView fork removed (§1.4);
+                redirect legacy bookmarks to the canonical shared IDAM admin. */}
+            <Route path="/security" element={<Navigate to="/admin/users" replace />} />
+            {/* PS-71 v2.2 canonical IDAM routes — shared @cloud-dog/idam components (W28E-1838-STD-F03: /admin/* canonical) */}
             <Route path="/admin" element={<Navigate to="/admin/users" replace />} />
-            <Route path="/admin/users" element={<UsersPage />} />
-            <Route path="/admin/groups" element={<GroupsPage />} />
-            <Route path="/admin/api-keys" element={<ApiKeysPage />} />
-            <Route path="/admin/rbac" element={<RbacPage />} />
+            <Route path="/admin/users" element={<IdamUsersPage apiBaseUrl="/api" />} />
+            <Route path="/admin/groups" element={<IdamGroupsPage apiBaseUrl="/api" />} />
+            <Route path="/admin/api-keys" element={<IdamApiKeysPage apiBaseUrl="/api" />} />
+            <Route path="/admin/roles" element={<IdamRolesRoute />} />
+            <Route path="/admin/rbac" element={<IdamRbacPage apiBaseUrl="/api" />} />
+            {/* legacy /idam/* (and /apikeys,/api-keys,/rbac) aliases -> 308/redirect to canonical /admin/* (PS-WEBUI-URL-CANONICAL WURL-ADMIN-*) */}
+            <Route path="/idam/users" element={<Navigate to="/admin/users" replace />} />
+            <Route path="/idam/groups" element={<Navigate to="/admin/groups" replace />} />
+            <Route path="/idam/api-keys" element={<Navigate to="/admin/api-keys" replace />} />
+            <Route path="/idam/roles" element={<Navigate to="/admin/roles" replace />} />
+            <Route path="/idam/rbac" element={<Navigate to="/admin/rbac" replace />} />
+            <Route path="/apikeys" element={<Navigate to="/admin/api-keys" replace />} />
+            <Route path="/api-keys" element={<Navigate to="/admin/api-keys" replace />} />
+            <Route path="/rbac" element={<Navigate to="/admin/rbac" replace />} />
             <Route path="/collections" element={<CollectionCrudPage />} />
+            <Route path="/structure/documents" element={<StructureDocumentsPage />} />
+            <Route path="/structure/corpora" element={<StructureCorporaPage />} />
+            <Route path="/structure/templates" element={<StructureTemplatesPage />} />
             <Route path="/source-config" element={<SourceConfigPage />} />
-            <Route path="/ingest-search" element={<IngestSearchPage />} />
+            <Route path="/source-connections" element={<Navigate to="/source-config" replace />} />
+            <Route path="/search" element={<IngestSearchPage />} />
+            <Route path="/ingest-search" element={<Navigate to="/search" replace />} />
             <Route path="/retention-delete" element={<RetentionDeletePage />} />
-            <Route path="/jobs" element={<JobsPageView />} />
-            <Route path="/observability" element={<ObservabilityPage />} />
-            <Route path="/mcp-console" element={<McpConsolePage />} />
-            <Route path="/a2a-console" element={<A2aConsolePage />} />
-            <Route path="/api-docs" element={<ApiDocsPage />} />
-            <Route path="/settings" element={<SettingsPage />} />
+            <Route path="/system/jobs" element={<JobsPageView />} />
+            <Route path="/jobs" element={<Navigate to="/system/jobs" replace />} />
+            {/* W28E-1870-A: VDB change-watch page (PS-102 §10); /watches -> canonical */}
+            <Route path="/system/watches" element={<WatchesPage />} />
+            <Route path="/watches" element={<Navigate to="/system/watches" replace />} />
+            <Route path="/audit-log" element={<ObservabilityPage />} />
+            <Route path="/audit" element={<Navigate to="/audit-log" replace />} />
+            <Route path="/diagnostics-audit" element={<Navigate to="/audit-log" replace />} />
+            <Route path="/observability" element={<Navigate to="/audit-log" replace />} />
+            <Route path="/logs" element={<Navigate to="/audit-log" replace />} />
+            <Route path="/developer/mcp-console" element={<McpConsolePage />} />
+            <Route path="/mcp-console" element={<Navigate to="/developer/mcp-console" replace />} />
+            <Route path="/developer/a2a-console" element={<A2aConsolePage />} />
+            <Route path="/a2a-console" element={<Navigate to="/developer/a2a-console" replace />} />
+            <Route path="/developer/api-docs" element={<ApiDocsPage />} />
+            <Route path="/api-docs" element={<Navigate to="/developer/api-docs" replace />} />
+            <Route path="/docs" element={<Navigate to="/developer/api-docs" replace />} />
+            <Route path="/openapi" element={<Navigate to="/developer/api-docs" replace />} />
+            <Route path="/system/settings" element={<SettingsPage />} />
+            <Route path="/settings" element={<Navigate to="/system/settings" replace />} />
+            {/* W28E-1845: canonical navigable About page (shared @cloud-dog/shell AboutPage); legacy /about -> 308/redirect */}
+            <Route
+              path="/system/about"
+              element={
+                <AboutPage
+                  productName={manifest.appName}
+                  description="Index retriever administration, ingest, search, observability, MCP, and A2A operations."
+                  websiteUrl="https://cloud-dog.net"
+                  version={cfg.APP_VERSION}
+                  buildDate={cfg.BUILD_DATE}
+                  commitHash={cfg.GIT_COMMIT}
+                />
+              }
+            />
+            <Route path="/about" element={<Navigate to="/system/about" replace />} />
             <Route path="*" element={<Navigate to="/dashboard" replace />} />
           </Routes>
 
@@ -343,10 +420,10 @@ function ShellApp() {
               <VersionInfo version={cfg.APP_VERSION} buildDate={cfg.BUILD_DATE} commitHash={cfg.GIT_COMMIT} />
               <DocLinks
                 links={[
-                  { label: "API Docs", url: "/api-docs" },
-                  { label: "MCP Console", url: "/mcp-console" },
-                  { label: "A2A Console", url: "/a2a-console" },
-                  { label: "Settings", url: "/settings" },
+                  { label: "API Docs", url: "/developer/api-docs" },
+                  { label: "MCP Console", url: "/developer/mcp-console" },
+                  { label: "A2A Console", url: "/developer/a2a-console" },
+                  { label: "Settings", url: "/system/settings" },
                 ]}
               />
               <Button variant="secondary" size="sm" onClick={() => setAboutOpen(true)}>
@@ -367,6 +444,15 @@ function ShellApp() {
         version={cfg.APP_VERSION}
       />
     </>
+  );
+}
+
+function IdamRolesRoute() {
+  return (
+    <div className="space-y-4">
+      <h1 className="text-2xl font-semibold text-foreground">Roles</h1>
+      <IdamRolesPage apiBaseUrl="/api" />
+    </div>
   );
 }
 

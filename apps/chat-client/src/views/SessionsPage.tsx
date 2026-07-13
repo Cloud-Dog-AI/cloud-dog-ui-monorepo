@@ -15,8 +15,8 @@
 // @cloud-dog/app-chat-client — Session management page.
 
 import * as React from "react";
-import { Button, Card, CardContent, CardHeader, DataTable, EntityDialog, EntityForm, Input, RelatedItemsPanel, RelativeTime } from "@cloud-dog/ui";
-import type { BulkAction, DataColumn, EntityFieldDef } from "@cloud-dog/ui";
+import { Button, Card, CardContent, CardHeader, EntityDialog, EntityForm, Input, RelatedItemsPanel, SessionsHistoryPanel } from "@cloud-dog/ui";
+import type { BulkAction, EntityFieldDef, SessionsHistoryAction, SessionsHistoryRow } from "@cloud-dog/ui";
 import type { SessionSummary, TranscriptEvent } from "../lib/types";
 import { useAppState } from "../state/AppState";
 
@@ -99,7 +99,6 @@ export function SessionsPage() {
   };
 
   const onDelete = async (sessionId: string) => {
-    if (!window.confirm(`Delete session ${sessionId}?`)) return;
     setError(null);
     setStatus(null);
     try {
@@ -117,7 +116,6 @@ export function SessionsPage() {
 
   const bulkDelete = async (rows: SessionSummary[]) => {
     if (!rows.length) return;
-    if (!window.confirm(`Delete ${rows.length} selected sessions?`)) return;
     setError(null);
     setStatus(null);
     try {
@@ -144,59 +142,51 @@ export function SessionsPage() {
     return sessions.filter((row) => `${sessionTitle(row)} ${row.id} ${row.created_at}`.toLowerCase().includes(trimmed));
   }, [query, sessions]);
 
-  const columns = React.useMemo<DataColumn<SessionSummary>[]>(() => [
+  const panelRows = React.useMemo<SessionsHistoryRow[]>(() => filteredSessions.map((row) => ({
+    id: row.id,
+    label: sessionTitle(row),
+    title: sessionTitle(row),
+    status: row.id === activeSessionId ? "Active" : "Idle",
+    createdAt: row.created_at,
+    // CL-11 (W28E-1876): derived session TTL populates the shared panel's
+    // "Expires" column so the dashboard "Active sessions" tile drills through
+    // to a listing that shows when each session lapses.
+    expiresAt: row.expires_at,
+    target: <span className="font-mono text-xs">{row.id}</span>,
+    retention: row.log_path ? "Transcript retained" : undefined,
+    summary: row.log_path ? `Log ${row.log_path}` : "Persisted chat session",
+    details: [
+      { label: "Session ID", value: <span className="font-mono text-xs">{row.id}</span> },
+      ...(row.log_path ? [{ label: "Log Path", value: row.log_path }] : []),
+    ],
+  })), [activeSessionId, filteredSessions]);
+
+  const rowActions = React.useCallback((row: SessionsHistoryRow): SessionsHistoryAction[] => [
     {
-      id: "title",
-      header: "Title",
-      sortable: true,
-      sortValue: (row) => sessionTitle(row).toLowerCase(),
-      cell: (row) => (
-        <Button
-          type="button"
-          className="text-left font-medium underline-offset-4 hover:underline"
-          onClick={() => void loadDetail(row)}
-        >
-          {sessionTitle(row)}
-        </Button>
-      ),
+      id: "open",
+      label: "Open",
+      onClick: () => setActiveSessionId(row.id),
     },
     {
-      id: "created",
-      header: "Created",
-      sortable: true,
-      sortValue: (row) => row.created_at,
-      cell: (row) => <RelativeTime timestamp={row.created_at} />,
+      id: "view-history",
+      label: "View History",
+      onClick: () => {
+        const target = filteredSessions.find((session) => session.id === row.id);
+        if (target) void loadDetail(target);
+      },
     },
     {
-      id: "status",
-      header: "Status",
-      sortable: true,
-      sortValue: (row) => (row.id === activeSessionId ? "active" : "idle"),
-      cell: (row) => (row.id === activeSessionId ? "Active" : "Idle"),
+      id: "delete",
+      label: "Delete",
+      destructive: true,
+      onClick: () => void onDelete(row.id),
+      confirm: {
+        title: "Delete Session",
+        description: "Delete this persisted chat session and its retained transcript metadata.",
+        confirmLabel: "Delete",
+      },
     },
-    {
-      id: "session-id",
-      header: "Session ID",
-      cell: (row) => <span className="font-mono text-xs">{row.id}</span>,
-    },
-    {
-      id: "actions",
-      header: "Actions",
-      cell: (row) => (
-        <div className="flex gap-2">
-          <Button variant="secondary" onClick={() => setActiveSessionId(row.id)}>
-            Open
-          </Button>
-          <Button variant="secondary" onClick={() => void loadDetail(row)}>
-            View
-          </Button>
-          <Button variant="ghost" onClick={() => void onDelete(row.id)}>
-            Delete
-          </Button>
-        </div>
-      ),
-    },
-  ], [activeSessionId, loadDetail, onDelete, setActiveSessionId]);
+  ], [filteredSessions, loadDetail, onDelete, setActiveSessionId]);
 
   const bulkActions = React.useMemo<BulkAction[]>(() => [{ label: "Delete Selected", action: "delete" }], []);
 
@@ -208,50 +198,44 @@ export function SessionsPage() {
 
   return (
     <div className="space-y-4">
-      <Card>
-        <CardHeader>
-          <h1 className="text-xl font-semibold">Sessions</h1>
-          <p className="text-sm text-muted-foreground">
-            Create, inspect, switch, and delete persisted chat sessions using the shared table and form patterns.
-          </p>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          <div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
-            <Input
-              aria-label="Search sessions"
-              className="max-w-md"
-              placeholder="Search sessions"
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-            />
-            <div className="flex flex-wrap gap-2">
-              <Button variant="secondary" onClick={() => void refreshSessions()}>
-                Refresh
-              </Button>
-              <Button onClick={() => setCreateOpen(true)}>Create session</Button>
-            </div>
-          </div>
-          <DataTable
-            tableId="chat-sessions"
-            columns={columns}
-            rows={filteredSessions}
-            totalRows={sessions.length}
-            emptyMessage="No sessions yet. Create one to begin."
-            getRowId={(row) => row.id}
-            page={page}
-            onPageChange={setPage}
-            pageSize={pageSize}
-            onPageSizeChange={setPageSize}
-            selectable={true}
-            bulkActions={bulkActions}
-            onBulkAction={onBulkAction}
-            columnPickerEnabled={true}
-          />
+      <div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
+        <Input
+          aria-label="Search sessions"
+          className="max-w-md"
+          placeholder="Search sessions"
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+        />
+      </div>
 
-          {status ? <p className="text-sm text-emerald-700">{status}</p> : null}
-          {error ? <p role="alert" className="text-sm text-destructive">{error}</p> : null}
-        </CardContent>
-      </Card>
+      <SessionsHistoryPanel
+        title="Sessions"
+        description="Create, inspect, switch, and delete persisted chat sessions using the shared sessions/history pattern."
+        rows={panelRows}
+        error={error}
+        emptyMessage="No sessions yet. Create one to begin."
+        canonicalRoute="/sessions"
+        onRefresh={() => void refreshSessions()}
+        onCreate={() => setCreateOpen(true)}
+        createLabel="Create session"
+        actionsForRow={rowActions}
+        bulkActions={bulkActions}
+        onBulkAction={onBulkAction}
+        bulkActionConfirm={(action, selectedIds) => action === "delete" ? {
+          title: "Delete Selected Sessions",
+          description: `Delete ${selectedIds.length} selected persisted chat sessions and their retained transcript metadata.`,
+          confirmLabel: "Delete Selected",
+        } : undefined}
+        totalRows={sessions.length}
+        page={page}
+        onPageChange={setPage}
+        pageSize={pageSize}
+        onPageSizeChange={setPageSize}
+        selectable
+        tableId="chat-sessions"
+      />
+
+      {status ? <p role="status" className="text-sm text-emerald-700">{status}</p> : null}
 
       <Card>
         <CardHeader>

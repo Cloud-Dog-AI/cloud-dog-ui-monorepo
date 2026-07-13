@@ -1,5 +1,19 @@
 import * as React from 'react';
-import { Badge, Button, FileDropZone, JsonBlock, Select, statusColumn, type EntityFieldDef, type EntityFormMode } from '@cloud-dog/ui';
+import {
+  Badge,
+  Button,
+  ConfirmDialog,
+  DocumentViewer,
+  FileBrowser,
+  FileDropZone,
+  JsonBlock,
+  Select,
+  statusColumn,
+  type EntityFieldDef,
+  type EntityFormMode,
+  type FileItem,
+  type FolderNode,
+} from '@cloud-dog/ui';
 import { useAuthz } from '../lib/authz';
 import { useExpertAgentState } from '../state/AppState';
 import type { FileRecord, KnowledgeRecord, StorageStats } from '../lib/api';
@@ -32,6 +46,8 @@ export function FilesPage() {
   const [ownedSessionIds, setOwnedSessionIds] = React.useState<Set<number>>(new Set());
   const [ingestFileTarget, setIngestFileTarget] = React.useState<FileRecord | null>(null);
   const [ingestDialogOpen, setIngestDialogOpen] = React.useState(false);
+  const [deleteTarget, setDeleteTarget] = React.useState<FileRecord | null>(null);
+  const [bulkDeleteTargets, setBulkDeleteTargets] = React.useState<FileRecord[]>([]);
   const [ingestForm, setIngestForm] = React.useState<{ knowledge_type: 'user' | 'group' | 'session'; knowledge_id: string; chunk_size: string; chunk_overlap: string; embedding_model: string }>({ knowledge_type: 'user', knowledge_id: String(authz.userId ?? ''), chunk_size: '', chunk_overlap: '', embedding_model: '' });
   const [loading, setLoading] = React.useState(true);
   const [status, setStatus] = React.useState<string | null>(null);
@@ -97,8 +113,7 @@ export function FilesPage() {
     }
   }, [api, captureFailure, clearFailure]);
 
-  const deleteFile = React.useCallback(async (file: FileRecord) => {
-    if (!window.confirm(`Delete file ${file.filename ?? file.id}?`)) return;
+  const deleteFileNow = React.useCallback(async (file: FileRecord) => {
     clearFailure();
     try {
       await api.deleteFile(file.id);
@@ -110,9 +125,8 @@ export function FilesPage() {
     }
   }, [api, captureFailure, clearFailure, refresh]);
 
-  const bulkDeleteFiles = React.useCallback(async (selected: FileRecord[]) => {
+  const bulkDeleteFilesNow = React.useCallback(async (selected: FileRecord[]) => {
     if (!selected.length) return;
-    if (!window.confirm(`Delete ${selected.length} selected files?`)) return;
     clearFailure();
     try {
       const result = await api.bulkDeleteFiles(selected.map((file) => file.id));
@@ -123,6 +137,14 @@ export function FilesPage() {
       captureFailure(error);
     }
   }, [api, captureFailure, clearFailure, refresh]);
+
+  const deleteFile = React.useCallback((file: FileRecord) => {
+    setDeleteTarget(file);
+  }, []);
+
+  const bulkDeleteFiles = React.useCallback((selected: FileRecord[]) => {
+    setBulkDeleteTargets(selected);
+  }, []);
 
   const downloadFile = React.useCallback((file: FileRecord) => {
     window.open(api.downloadFileUrl(file.id), '_blank', 'noopener');
@@ -190,6 +212,26 @@ export function FilesPage() {
   ), [authz.isAdmin, files, ownedSessionIds]);
 
   const dirs = React.useMemo(() => uniqueDirs(allVisibleFiles), [allVisibleFiles]);
+  const browserFolders = React.useMemo<FolderNode[]>(
+    () => [{ name: 'Files', path: '/', children: dirs.filter((dir) => dir !== '/').map((dir) => ({ name: dir, path: dir })) }],
+    [dirs]
+  );
+  const browserFiles = React.useMemo<FileItem[]>(
+    () => visibleFiles.map((file) => ({
+      name: file.filename ?? `File ${file.id}`,
+      path: file.file_path ?? `/files/${file.id}`,
+      size: formatBytes(file.size_bytes ?? file.file_size ?? undefined),
+      contentType: file.mime_type ?? undefined,
+      status: file.processing_status ?? undefined,
+      kind: 'file',
+      testId: `expert-agent-file-${file.id}`,
+    })),
+    [visibleFiles]
+  );
+  const fileByPath = React.useMemo(
+    () => new Map(visibleFiles.map((file) => [file.file_path ?? `/files/${file.id}`, file])),
+    [visibleFiles]
+  );
 
   const computedTotalBytes = React.useMemo(() => {
     const fromStats = stats?.total_bytes;
@@ -245,7 +287,46 @@ export function FilesPage() {
         {stats?.total_files != null && <span>{stats.total_files} storage objects</span>}
         {stats?.storage_root && <span title="Storage URI">URI: {stats.storage_root}</span>}
       </div>
-      {authz.isAdmin && <FileDropZone onDrop={handleUpload} />}
+      <FileDropZone
+        onDrop={authz.isAdmin ? handleUpload : () => undefined}
+        disabled={!authz.isAdmin}
+        label="Upload expert file"
+        description="Uploaded files can be viewed, downloaded, or ingested into knowledge."
+        disabledDescription="Only administrators can upload files on this page."
+        testId="expert-agent-file-drop-zone"
+      />
+      <FileBrowser
+        folders={browserFolders}
+        files={browserFiles}
+        currentPath={currentDir}
+        loading={loading}
+        errorMessage={latestFailure}
+        statusMessage={`${visibleFiles.length} files visible`}
+        emptyMessage={currentDir === '/' ? 'No files uploaded.' : `No files in ${currentDir}.`}
+        readOnly={false}
+        selectedPath={selectedFile?.file_path ?? (selectedFile ? `/files/${selectedFile.id}` : undefined)}
+        onNavigate={setCurrentDir}
+        onRefresh={refresh}
+        onOpen={(path) => {
+          const file = fileByPath.get(path);
+          if (file) void viewFileContent(file);
+        }}
+        onDownload={(path) => {
+          const file = fileByPath.get(path);
+          if (file) downloadFile(file);
+        }}
+        onDelete={(path) => {
+          const file = fileByPath.get(path);
+          if (file) deleteFile(file);
+        }}
+        deleteConfirmation={{
+          enabled: true,
+          title: 'Delete file',
+          description: 'Permanently delete this file from Expert Agent storage.',
+          confirmLabel: 'Delete file',
+        }}
+        testId="expert-agent-file-browser"
+      />
       <AppDataTable
         title="File inventory"
         rows={visibleFiles}
@@ -307,10 +388,13 @@ export function FilesPage() {
             ))}
           </div>
           {fileContent !== null && (
-            <div>
-              <h4 className="text-sm font-medium text-muted-foreground mb-1">Content Preview</h4>
-              <pre className="text-xs bg-muted p-3 rounded max-h-64 overflow-auto whitespace-pre-wrap">{fileContent}</pre>
-            </div>
+            <DocumentViewer
+              title="Content Preview"
+              content={fileContent}
+              format="auto"
+              maxHeight="320px"
+              downloadFilename={selectedFile.filename ?? `file-${selectedFile.id}.txt`}
+            />
           )}
           {fileContent === null && selectedFile.mime_type && !selectedFile.mime_type.startsWith('text/') && (
             <p className="text-xs text-muted-foreground">Binary file — use Download to view.</p>
@@ -327,6 +411,38 @@ export function FilesPage() {
         onSubmit={() => void ingestFile()}
         onCancel={closeIngestDialog}
         relatedPanels={ingestFileTarget ? [{ title: 'Selected file', items: [{ id: String(ingestFileTarget.id), label: `${ingestFileTarget.filename ?? ingestFileTarget.id} • ${formatBytes(ingestFileTarget.size_bytes ?? 0)} • ${ingestFileTarget.processing_status ?? 'unknown status'}` }] }] : []}
+      />
+      <ConfirmDialog
+        open={Boolean(deleteTarget)}
+        onOpenChange={(open) => {
+          if (!open) setDeleteTarget(null);
+        }}
+        title="Delete file"
+        description="Permanently delete this file from Expert Agent storage."
+        targetName={deleteTarget?.filename ?? (deleteTarget ? String(deleteTarget.id) : undefined)}
+        confirmLabel="Delete file"
+        confirmVariant="destructive"
+        onConfirm={() => {
+          const target = deleteTarget;
+          setDeleteTarget(null);
+          if (target) void deleteFileNow(target);
+        }}
+      />
+      <ConfirmDialog
+        open={bulkDeleteTargets.length > 0}
+        onOpenChange={(open) => {
+          if (!open) setBulkDeleteTargets([]);
+        }}
+        title="Delete selected files"
+        description="Permanently delete the selected files from Expert Agent storage."
+        targetName={`${bulkDeleteTargets.length} files`}
+        confirmLabel="Delete files"
+        confirmVariant="destructive"
+        onConfirm={() => {
+          const targets = bulkDeleteTargets;
+          setBulkDeleteTargets([]);
+          void bulkDeleteFilesNow(targets);
+        }}
       />
     </PageScaffold>
   );

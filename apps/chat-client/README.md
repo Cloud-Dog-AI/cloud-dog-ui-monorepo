@@ -8,6 +8,8 @@ React frontend for the Cloud-Dog chat client backend.
 - Streaming chat responses (JSON Lines stream)
 - MCP server health and per-session selection
 - MCP tool browser with JSON argument execution
+- Multimodal media result rendering through shared `@cloud-dog/ui` asset-reference helpers (`asset_url`/`url` and
+  `storage_path`, no inline `data:` URLs by default)
 - Settings page with redacted global config view
 - Right-side activity drawer (health + tool execution history)
 
@@ -30,14 +32,14 @@ window.__RUNTIME_CONFIG__ = {
 1. Start backend API (from `chat-client` repo):
 
 ```bash
-cd <your-workspace>/chat-client
+cd chat-client
 PYTHONPATH=src python3 -m cloud_dog_chat_client.cli api --env private/env-at1-14-search-news-hungarian-bridge
 ```
 
 2. Start UI app (from monorepo root):
 
 ```bash
-cd <your-workspace>/cloud-dog-ui-monorepo
+cd cloud-dog-ai-ui-monorepo
 CHAT_CLIENT_API_PROXY_TARGET=http://127.0.0.1:8090 npm run dev --workspace @cloud-dog/app-chat-client
 ```
 

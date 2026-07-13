@@ -123,7 +123,7 @@ export function Ps72ResultMeta(props: {
             Async job{" "}
             <a
               data-testid={`${props.testIdPrefix}-job-link`}
-              href={props.jobsHref ?? "/jobs"}
+              href={props.jobsHref ?? "/system/jobs"}
               className="font-mono font-semibold text-sky-700 hover:underline"
             >
               {props.jobId}

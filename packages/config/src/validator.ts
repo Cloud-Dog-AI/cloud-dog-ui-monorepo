@@ -29,6 +29,8 @@ export function warnIfSecrets(config: Record<string, unknown>): void {
   const suspicious = ["SECRET", "PASSWORD", "PRIVATE_KEY", "TOKEN", "KEY"];
   for (const [key, value] of Object.entries(config)) {
     if (typeof value !== "string") continue;
+    if (/_?HEADER$/i.test(key)) continue;
+    if (key === "AUTH_MODE" && value.toLowerCase() === "api_key") continue;
     const v = value.toUpperCase();
     if (suspicious.some((s) => v.includes(s))) {
       // Runtime config is public; do not block app startup, but warn loudly.

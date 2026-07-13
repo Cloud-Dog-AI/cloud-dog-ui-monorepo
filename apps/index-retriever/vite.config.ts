@@ -111,6 +111,14 @@ function indexRetrieverSpaRoutes() {
 
 export default defineConfig({
   plugins: [indexRetrieverSpaRoutes(), react()],
+  resolve: {
+    alias: {
+      "@cloud-dog/auth": fileURLToPath(new URL("../../packages/auth/src/index.ts", import.meta.url)),
+      "@cloud-dog/config": fileURLToPath(new URL("../../packages/config/src/index.ts", import.meta.url)),
+      "@cloud-dog/shell": fileURLToPath(new URL("../../packages/shell/src/index.ts", import.meta.url)),
+      "@cloud-dog/ui": fileURLToPath(new URL("../../packages/ui/src/index.ts", import.meta.url)),
+    },
+  },
   server: {
     proxy: {
       ...proxyEntries,

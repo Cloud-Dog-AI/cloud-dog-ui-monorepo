@@ -119,6 +119,7 @@ export type FileMcpApi = Readonly<{
   createAdminProfile: (payload: {
     name: string;
     display_name?: string;
+    description?: string;
     backend: string;
     root: string;
     api_keys?: string[];
@@ -127,6 +128,7 @@ export type FileMcpApi = Readonly<{
     name: string,
     payload: Partial<{
       display_name: string;
+      description: string;
       backend: string;
       root: string;
       api_keys: string[];
@@ -144,6 +146,17 @@ export type FileMcpApi = Readonly<{
   getQueueStatus: () => Promise<QueueStatus>;
   getA2aHealth: () => Promise<unknown>;
   sendA2aMessage: (topic: string, payload: unknown) => Promise<unknown>;
+  // W28E-1870-B storage change-watch surface (PS-102 §5.5 / CSTREAM-FILE).
+  listWatches: () => Promise<Record<string, unknown>[]>;
+  createWatch: (input: Record<string, unknown>) => Promise<Record<string, unknown>>;
+  getWatchStatus: (watchId: string) => Promise<Record<string, unknown>>;
+  getWatchEvents: (watchId: string, sinceCursor?: string) => Promise<Record<string, unknown>>;
+  ackWatch: (watchId: string, ackCursor: string) => Promise<Record<string, unknown>>;
+  recoverWatch: (watchId: string, sinceCursor?: string) => Promise<Record<string, unknown>>;
+  pauseWatch: (watchId: string) => Promise<Record<string, unknown>>;
+  resumeWatch: (watchId: string) => Promise<Record<string, unknown>>;
+  testEventWatch: (watchId: string, action?: string, objectRef?: string) => Promise<Record<string, unknown>>;
+  deleteWatch: (watchId: string) => Promise<Record<string, unknown>>;
 }>;
 
 function asRecord(value: unknown): JsonRecord {
@@ -750,11 +763,14 @@ export function createFileMcpApi(opts: {
           return {
             name: String(profile.name ?? ""),
             display_name: String(profile.display_name ?? profile.name ?? ""),
+            description: String(profile.description ?? ""),
             backend: String(profile.backend ?? "local"),
             roots: Array.isArray(profile.roots) ? profile.roots.map((value) => String(value)) : [],
             api_keys_count: Number(profile.api_keys_count ?? 0),
             status: typeof profile.status === "string" ? profile.status : undefined,
+            status_missing: asStringArray(profile.status_missing),
             reason: typeof profile.reason === "string" ? profile.reason : undefined,
+            endpoint_health: asRecord(profile.endpoint_health),
             profile: asRecord(profile.profile),
           } satisfies AdminProfile;
         });
@@ -767,6 +783,7 @@ export function createFileMcpApi(opts: {
           {
             name: payload.name,
             display_name: payload.display_name,
+            description: payload.description ?? "",
             backend: payload.backend,
             root: payload.root,
             api_keys: payload.api_keys ?? [],
@@ -915,5 +932,50 @@ export function createFileMcpApi(opts: {
           health,
         };
       }),
+
+    // ── W28E-1870-B storage change-watch surface (PS-102 §5.5 / CSTREAM-FILE) ──
+    listWatches: () =>
+      guarded(async () => {
+        const payload = await client.get<unknown>("/v1/watches", { headers: adminHeaders() });
+        const rows = asRecord(payload).watches;
+        return Array.isArray(rows) ? (rows as Record<string, unknown>[]) : [];
+      }),
+    createWatch: (input) =>
+      guarded(async () =>
+        asRecord(await client.post<unknown>("/v1/watches", input, { headers: adminHeaders() })),
+      ),
+    getWatchStatus: (watchId) =>
+      guarded(async () =>
+        asRecord(await client.get<unknown>(`/v1/watches/${encodeURIComponent(watchId)}/status`, { headers: adminHeaders() })),
+      ),
+    getWatchEvents: (watchId, sinceCursor) =>
+      guarded(async () => {
+        const q = sinceCursor ? `?since_cursor=${encodeURIComponent(sinceCursor)}` : "";
+        return asRecord(await client.get<unknown>(`/v1/watches/${encodeURIComponent(watchId)}/events${q}`, { headers: adminHeaders() }));
+      }),
+    ackWatch: (watchId, ackCursor) =>
+      guarded(async () =>
+        asRecord(await client.post<unknown>(`/v1/watches/${encodeURIComponent(watchId)}/ack`, { ack_cursor: ackCursor }, { headers: adminHeaders() })),
+      ),
+    recoverWatch: (watchId, sinceCursor) =>
+      guarded(async () =>
+        asRecord(await client.post<unknown>(`/v1/watches/${encodeURIComponent(watchId)}/recover`, sinceCursor ? { since_cursor: sinceCursor } : {}, { headers: adminHeaders() })),
+      ),
+    pauseWatch: (watchId) =>
+      guarded(async () =>
+        asRecord(await client.post<unknown>(`/v1/watches/${encodeURIComponent(watchId)}/pause`, {}, { headers: adminHeaders() })),
+      ),
+    resumeWatch: (watchId) =>
+      guarded(async () =>
+        asRecord(await client.post<unknown>(`/v1/watches/${encodeURIComponent(watchId)}/resume`, {}, { headers: adminHeaders() })),
+      ),
+    testEventWatch: (watchId, action = "created", objectRef = "test") =>
+      guarded(async () =>
+        asRecord(await client.post<unknown>(`/v1/watches/${encodeURIComponent(watchId)}/test-event`, { action, object_ref: objectRef }, { headers: adminHeaders() })),
+      ),
+    deleteWatch: (watchId) =>
+      guarded(async () =>
+        asRecord(await client.delete<unknown>(`/v1/watches/${encodeURIComponent(watchId)}`, { headers: adminHeaders() })),
+      ),
   };
 }

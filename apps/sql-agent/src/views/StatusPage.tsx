@@ -19,19 +19,15 @@
 import * as React from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useConfig } from '@cloud-dog/config';
+import { DashboardLayout } from '@cloud-dog/shell';
 import {
-  HealthWidget,
   MetricCard,
   QuickActionBar,
   ResourceMetrics,
-  type HealthStatus,
   type MetricItem,
   type QuickAction,
 } from '@cloud-dog/ui';
 import {
-  ErrorState,
-  LoadingState,
-  PageFrame,
   PanelCard,
   requestJson,
   useApiResource,
@@ -70,23 +66,6 @@ type StatusPayload = {
   };
 };
 
-type SidecarStatus = {
-  running?: boolean;
-  status?: string;
-  pid?: number;
-};
-
-function toHealthStatus(status: string | undefined, ready?: boolean, running?: boolean): HealthStatus {
-  if (running === false) return 'error';
-  const normalised = `${status ?? ''}`.toLowerCase();
-  if (ready || running === true || normalised.includes('ready') || normalised.includes('healthy') || normalised.includes('running')) {
-    return 'ok';
-  }
-  if (normalised.includes('warn') || normalised.includes('start') || normalised.includes('busy')) return 'warning';
-  if (normalised.includes('error') || normalised.includes('fail') || normalised.includes('stopped')) return 'error';
-  return 'unknown';
-}
-
 export function StatusPage() {
   const cfg = useConfig<AppRuntimeConfig>();
   const navigate = useNavigate();
@@ -94,20 +73,12 @@ export function StatusPage() {
     () => requestJson(cfg.API_BASE_URL, '/api/v1/status'),
     [cfg.API_BASE_URL],
   );
-  const mcp = useApiResource<SidecarStatus>(
-    () => requestJson(cfg.API_BASE_URL, '/api/v1/servers/mcp/status'),
-    [cfg.API_BASE_URL],
-  );
-  const a2a = useApiResource<SidecarStatus>(
-    () => requestJson(cfg.API_BASE_URL, '/api/v1/servers/a2a/status'),
-    [cfg.API_BASE_URL],
-  );
 
   const actions = React.useMemo<QuickAction[]>(
     () => [
       { label: 'New Query', onClick: () => navigate('/query') },
       { label: 'Browse Tables', onClick: () => navigate('/tables') },
-      { label: 'View Jobs', onClick: () => navigate('/jobs') },
+      { label: 'View Jobs', onClick: () => navigate('/system/jobs') },
     ],
     [navigate],
   );
@@ -124,52 +95,52 @@ export function StatusPage() {
     ];
   }, [status.data?.resource_metrics]);
 
+  if (status.loading) {
+    return (
+      <div className="flex min-h-[40vh] items-center gap-2 text-sm text-muted-foreground" role="status" aria-live="polite">
+        Loading dashboard...
+      </div>
+    );
+  }
+
   return (
-    <PageFrame
-      eyebrow="FR-58"
-      title="Dashboard"
-      description="Review live health, resource usage, service metrics, and recent query activity without dropping into raw JSON."
-    >
-      <QuickActionBar actions={actions} />
+    <div className="space-y-6">
+      {/* W28E-1837 / CX-180: canonical dashboard header — single h1 + Refresh. */}
+      <header className="space-y-1">
+        <div className="flex flex-wrap items-center gap-3">
+          <h1 className="text-2xl font-semibold">Dashboard</h1>
+          <button
+            type="button"
+            className="rounded-md border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50"
+            onClick={() => status.refresh()}
+          >
+            Refresh
+          </button>
+        </div>
+        <p className="text-sm text-muted-foreground">
+          Review live resource usage, service metrics, and recent query activity.
+        </p>
+      </header>
 
-      {status.loading ? <LoadingState label="dashboard status" /> : null}
-      {status.error ? <ErrorState message={status.error} /> : null}
+      {status.error ? (
+        <p role="alert" className="text-sm text-destructive">{status.error}</p>
+      ) : null}
 
-      <div className="space-y-6">
-        {!status.loading && !status.error ? (
+      {/* W28E-1837 / STD-F02: canonical DashboardLayout — metric row + quick actions +
+          recent-activity table; ResourceMetrics detail panel in children.
+          CX-180: API/MCP/A2A status lives in the shell top-bar only (App.tsx); body
+          status rows removed per CX-180. */}
+      <DashboardLayout
+        metricCards={
           <>
-            <div className="grid gap-4 xl:grid-cols-3">
-            <HealthWidget
-              name="API"
-              status={toHealthStatus(status.data?.status, status.data?.ready)}
-              detail={status.data?.message ?? 'N/A'}
-            />
-            <HealthWidget
-              name="MCP"
-              status={toHealthStatus(mcp.data?.status, false, mcp.data?.running)}
-              detail={mcp.data?.pid != null ? `PID ${mcp.data.pid}` : 'N/A'}
-            />
-            <HealthWidget
-              name="A2A"
-              status={toHealthStatus(a2a.data?.status, false, a2a.data?.running)}
-              detail={a2a.data?.pid != null ? `PID ${a2a.data.pid}` : 'N/A'}
-            />
-            </div>
-
-            <div className="grid gap-4 xl:grid-cols-4">
             <MetricCard label="Connected DBs" value={status.data?.service_metrics?.connected_database_count ?? 'N/A'} />
             <MetricCard label="Tables" value={status.data?.service_metrics?.table_count ?? status.data?.tables ?? 'N/A'} />
             <MetricCard label="Context Tables" value={status.data?.service_metrics?.context_table_count ?? status.data?.tables_loaded ?? 'N/A'} />
             <MetricCard label="Queries" value={status.data?.service_metrics?.query_count ?? status.data?.job_manager?.total_jobs ?? 'N/A'} />
-            </div>
           </>
-        ) : null}
-
-        <PanelCard title="Resource metrics" subtitle="Live runtime values from `/api/v1/status`">
-          <ResourceMetrics metrics={resourceMetrics} />
-        </PanelCard>
-
-        {!status.loading && !status.error ? (
+        }
+        quickActions={<QuickActionBar actions={actions} />}
+        recentActivity={
           <PanelCard title="Recent audit activity" subtitle="Latest audit and server entries visible through the authenticated Web proxy.">
             <LogExplorer
               apiBaseUrl={cfg.API_BASE_URL}
@@ -179,8 +150,13 @@ export function StatusPage() {
               tableId="sql-agent-dashboard-log-explorer"
             />
           </PanelCard>
-        ) : null}
-      </div>
-    </PageFrame>
+        }
+      >
+        {/* ResourceMetrics live polling panel (service-extension slot). */}
+        <PanelCard title="Resource metrics" subtitle="Live runtime values from `/api/v1/status`">
+          <ResourceMetrics metrics={resourceMetrics} />
+        </PanelCard>
+      </DashboardLayout>
+    </div>
   );
 }

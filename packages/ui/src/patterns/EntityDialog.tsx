@@ -67,16 +67,16 @@ export function EntityDialog(props: EntityDialogProps) {
       className={props.className}
       submitLabel={props.submitLabel}
       idPrefix={props.idPrefix}
-      extra={props.extra}
     />
   );
 
   return (
     <Dialog open={props.open} onOpenChange={props.onOpenChange} label={props.title}>
-      <div className="space-y-4">
+      {/* PS-77 CW-F1 — EntityDialog root (modal CRUD create/edit container). */}
+      <div className="space-y-4" data-testid="CW-F1">
         <h2 className="text-lg font-semibold">{props.title}</h2>
         {body}
-        {isBodyDialog(props) ? props.extra : null}
+        {props.extra}
         {props.relatedPanels?.length ? (
           <div className="grid gap-3 md:grid-cols-2">
             {props.relatedPanels.map((panel) => (

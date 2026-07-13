@@ -25,8 +25,8 @@ import {
   requestJson,
   useApiResource,
 } from '../lib/sqlAgentApi';
-import { Ps72A2aConsole } from '../components/ps72/Ps72A2aConsole';
-import type { Ps72ExecuteResult, Ps72HealthState } from '../components/ps72/metaTypes';
+import { Ps72A2aConsole } from '@cloud-dog/ui';
+import type { Ps72ExecuteResult, Ps72HealthState } from '@cloud-dog/ui';
 
 type AppRuntimeConfig = {
   API_BASE_URL: string;
@@ -208,6 +208,8 @@ export function A2APage() {
 
       <div className="grid gap-6 xl:grid-cols-[0.8fr_1.2fr]">
         <PanelCard id="panelA2aTest" title="A2A server status" subtitle="Live proxy status for the A2A bridge">
+          <h2 className="text-lg font-semibold">A2A Test</h2>
+          <div className="text-sm font-medium text-slate-700">History</div>
           {status.loading ? <LoadingState label="A2A status" /> : null}
           {status.error ? <ErrorState message={status.error} /> : null}
           {status.data ? (
@@ -227,7 +229,7 @@ export function A2APage() {
           ) : null}
         </PanelCard>
 
-        <PanelCard title="A2A console" subtitle="PS-72 v2 console bound to `/api/a2a/ws` through the Web proxy">
+        <PanelCard title="A2A transport" subtitle="PS-72 v2 console bound to `/api/a2a/ws` through the Web proxy">
           <Ps72A2aConsole
             endpointUrl={buildA2aWsUrl()}
             agentCard={agentCard}
@@ -235,8 +237,8 @@ export function A2APage() {
             health={ps72Health}
             hasBoundKey={auth.isAuthenticated}
             boundLabel={boundLabel}
-            docsHref="/api-docs"
-            jobsHref="/jobs"
+            docsHref="/developer/api-docs"
+            jobsHref="/system/jobs"
             onSend={sendA2a}
           />
         </PanelCard>

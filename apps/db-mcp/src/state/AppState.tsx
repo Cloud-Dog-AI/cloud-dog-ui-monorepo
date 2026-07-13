@@ -82,6 +82,10 @@ export function AppStateProvider(props: { children: React.ReactNode }) {
   const [profiles, setProfiles] = React.useState<ProfileSummary[]>([]);
   const [profilesLoading, setProfilesLoading] = React.useState(false);
   const [selectedProfileIdState, setSelectedProfileIdState] = React.useState<string>("");
+  // XC-001: version banner is sourced from the running container's live GET /version,
+  // not the build-baked APP_VERSION constant. Falls back to "unknown" on network failure
+  // and re-fetches on every app boot / browser refresh.
+  const [appVersion, setAppVersion] = React.useState<string>("unknown");
   const getAccessTokenRef = React.useRef(getAccessToken);
 
   React.useEffect(() => {
@@ -114,6 +118,26 @@ export function AppStateProvider(props: { children: React.ReactNode }) {
       }),
     [cfg.API_BASE_URL, cfg.MCP_BASE_URL]
   );
+
+  // XC-001: fetch the live container version from GET /version at boot and on base-url change.
+  React.useEffect(() => {
+    let cancelled = false;
+    const fetchVersion = async () => {
+      try {
+        const res = await fetch(`${cfg.API_BASE_URL}/version`, { credentials: "same-origin" });
+        if (!res.ok) throw new Error(`version ${res.status}`);
+        const body = (await res.json()) as { version?: unknown };
+        const v = typeof body.version === "string" && body.version.trim() ? body.version : "unknown";
+        if (!cancelled) setAppVersion(v);
+      } catch {
+        if (!cancelled) setAppVersion("unknown");
+      }
+    };
+    void fetchVersion();
+    return () => {
+      cancelled = true;
+    };
+  }, [cfg.API_BASE_URL]);
 
   const setSelectedProfileId = React.useCallback((profileId: string) => {
     setSelectedProfileIdState(profileId);
@@ -196,7 +220,7 @@ export function AppStateProvider(props: { children: React.ReactNode }) {
     selectedProfileId: selectedProfileIdState,
     setSelectedProfileId,
     currentProfile,
-    appVersion: cfg.APP_VERSION ?? "0.0.0-dev",
+    appVersion,
   };
 
   return <AppStateContext.Provider value={value}>{props.children}</AppStateContext.Provider>;

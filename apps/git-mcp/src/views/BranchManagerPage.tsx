@@ -16,7 +16,7 @@
 
 import * as React from "react";
 import { useAuth } from "@cloud-dog/auth";
-import { Badge, Button, Card, CardContent, CardHeader, DataTable, EntityDialog, type DataColumn, type EntityFieldDef } from "@cloud-dog/ui";
+import { Badge, Button, Card, CardContent, CardHeader, DataTable, EntityDialog, QuickActionBar, type DataColumn, type EntityFieldDef, type QuickAction } from "@cloud-dog/ui";
 import { useGitMcpState } from "../state/AppState";
 import { buildWorkspaceOpenArgs, useWorkspaceSession, WorkspaceSessionCard } from "./WorkspaceSessionCard";
 import { getGitRoleAccess } from "../lib/rbac";
@@ -157,7 +157,7 @@ export function BranchManagerPage() {
   return (
     <div className="space-y-6">
       <header className="flex flex-wrap items-center gap-3">
-        <h1 className="text-2xl font-bold">Branch Manager</h1>
+        <h1 className="text-2xl font-semibold">Branch Manager</h1>
         <Badge variant="secondary">{access.primaryRole}</Badge>
       </header>
 
@@ -166,12 +166,14 @@ export function BranchManagerPage() {
         onOpenWorkspace={openWorkspace}
         status={status}
         error={error}
-        title="Branch workspace context"
+        title="Branch Workspace Context"
         actions={
-          <>
-            <Button variant="secondary" onClick={() => void refresh(true)} disabled={!session.workspaceId}>Refresh branches</Button>
-            {access.canManageBranches ? <Button onClick={() => setDialogOpen(true)} disabled={!session.workspaceId}>Create branch</Button> : null}
-          </>
+          <QuickActionBar
+            actions={[
+              { label: "Refresh branches", variant: "secondary", onClick: () => void refresh(true) },
+              ...(access.canManageBranches ? [{ label: "Create branch", onClick: () => setDialogOpen(true) } as QuickAction] : []),
+            ]}
+          />
         }
       />
 

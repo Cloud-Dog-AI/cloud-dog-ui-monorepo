@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Cloud-Dog Search MCP</title>
+    <script>
+      // search-mcp is served by its own web tier on the same origin: the SPA talks to
+      // /v1 (REST + cookie auth) + /mcp + /a2a + /.well-known. Runtime config is
+      // inlined here to avoid a 404 on /runtime-config.js (the FastAPI app doesn't
+      // serve that path). API_KEY_HEADER is deliberately NOT emitted — search-mcp
+      // uses AUTH_MODE="cookie"; the SPA never sets X-API-Key (mirrors the
+      // W28A-727-R5 chat-client / db-mcp pattern).
+      window.__RUNTIME_CONFIG__ = {
+        ENV: "production",
+        API_BASE_URL: window.location.origin + "/v1",
+        AUTH_MODE: "cookie",
+        APP_VERSION: "0.1.0"
+      };
+    </script>
+  </head>
+  <body class="bg-background text-foreground">
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

@@ -16,11 +16,15 @@
 
 import * as React from "react";
 import { useConfig } from "@cloud-dog/config";
-import { Badge, Button, Card, CardContent, CardHeader, JsonBlock, McpConsole } from "@cloud-dog/ui";
+import { Button, Ps72McpConsole } from "@cloud-dog/ui";
+import type { Ps72HealthState } from "@cloud-dog/ui";
 import { useIndexRetrieverState } from "../state/AppState";
 import type { JsonRecord, ToolDescriptor } from "../lib/types";
+import { maskBoundKey, ps72McpToolCall } from "../lib/ps72Console";
 
 type RuntimeConfig = Readonly<{
+  API_BASE_URL: string;
+  AUTH_MODE?: "api_key" | "cookie" | "oidc";
   MCP_BASE_URL?: string;
 }>;
 
@@ -46,41 +50,47 @@ function injectProfileCollectionDefaults(
 export function McpConsolePage() {
   const cfg = useConfig<RuntimeConfig>();
   const app = useIndexRetrieverState();
+  const { api, apiKey, captureFailure, recordActivity, sourceConfig } = app;
 
   const [tools, setTools] = React.useState<ToolDescriptor[]>([]);
-  const [lastResponse, setLastResponse] = React.useState<unknown>(null);
   const [status, setStatus] = React.useState("");
   const [error, setError] = React.useState<string | null>(null);
 
   const loadTools = React.useCallback(async () => {
     setError(null);
     try {
-      const list = await app.api.listTools();
+      const list = await api.listTools();
       setTools(list);
       setStatus(`Loaded ${list.length} tool(s)`);
-      app.recordActivity("mcp.tools_list", "ok", String(list.length));
+      recordActivity("mcp.tools_list", "ok", String(list.length));
     } catch (loadError) {
-      const message = app.captureFailure(loadError);
+      const message = captureFailure(loadError);
       setError(message);
       setStatus("");
-      app.recordActivity("mcp.tools_list", "error", message);
+      recordActivity("mcp.tools_list", "error", message);
     }
-  }, [app]);
+  }, [api, captureFailure, recordActivity]);
 
   React.useEffect(() => {
     void loadTools();
   }, [loadTools]);
 
-  const execute = async (toolName: string, args: unknown) => {
-    const payload = args && typeof args === "object" && !Array.isArray(args) ? (args as JsonRecord) : {};
-    const result = await app.api.callTool(toolName, payload);
-    setLastResponse(result);
-    setStatus(`Executed ${toolName}`);
-    app.recordActivity(`mcp.${toolName}`, "ok");
+  const execute = async (toolName: string, args: unknown, overrideKey: string) => {
+    const result = await ps72McpToolCall({
+      apiBaseUrl: cfg.API_BASE_URL,
+      toolName,
+      args,
+      boundApiKey: apiKey,
+      overrideKey,
+    });
+    setStatus(`Submitted ${toolName}`);
+    recordActivity(`mcp.${toolName}`, result.denied ? "error" : "ok", result.denied ? String(result.httpStatus) : undefined);
     return result;
   };
 
   const endpointUrl = cfg.MCP_BASE_URL?.trim() || `${window.location.origin}/mcp`;
+  const health: Ps72HealthState = error ? "unhealthy" : tools.length > 0 ? "healthy" : "unknown";
+  const hasBoundKey = cfg.AUTH_MODE === "api_key" ? Boolean(apiKey.trim()) : true;
 
   return (
     <div className="space-y-6">
@@ -107,52 +117,25 @@ export function McpConsolePage() {
         </p>
       ) : null}
 
-      {/* PS-72 MW4: Auth display */}
-      <Card>
-        <CardHeader>
-          <div className="flex items-center gap-2">
-            <h2 className="text-lg font-semibold">Authentication</h2>
-            <Badge variant="default" className="bg-emerald-600 text-white border-emerald-700">api_key</Badge>
-          </div>
-        </CardHeader>
-        <CardContent>
-          <p className="text-sm text-muted-foreground">MCP endpoint: <code className="text-xs">{endpointUrl}</code> — Authenticated via web proxy session.</p>
-          <p className="text-sm text-muted-foreground mt-1">
-            Active context: profile=<code className="text-xs">{app.sourceConfig.profile}</code>{" "}
-            collection=<code className="text-xs">{app.sourceConfig.collection || "(none)"}</code>
-          </p>
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader>
-          <h2 className="text-lg font-semibold">MCP Catalogue and Tool Calls</h2>
-        </CardHeader>
-        <CardContent>
-          <McpConsole
-            endpointUrl={endpointUrl}
-            tools={tools.map((tool) => ({
-              name: tool.name,
-              description: tool.description,
-              inputSchema: injectProfileCollectionDefaults(
-                tool.input_schema,
-                app.sourceConfig.profile,
-                app.sourceConfig.collection,
-              ),
-            }))}
-            onExecute={execute}
-          />
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader>
-          <h2 className="text-lg font-semibold">Tool response</h2>
-        </CardHeader>
-        <CardContent>
-          <JsonBlock title="response" value={lastResponse ?? {}} />
-        </CardContent>
-      </Card>
+      <Ps72McpConsole
+        endpointUrl={endpointUrl}
+        health={health}
+        hasBoundKey={hasBoundKey}
+        boundLabel={maskBoundKey(apiKey)}
+        docsHref="/api-docs#mcp"
+        jobsHref="/system/jobs"
+        tools={tools.map((tool) => ({
+          name: tool.name,
+          description: tool.description,
+          bound: true,
+          inputSchema: injectProfileCollectionDefaults(
+            tool.input_schema,
+            sourceConfig.profile,
+            sourceConfig.collection,
+          ),
+        }))}
+        onExecute={execute}
+      />
     </div>
   );
 }

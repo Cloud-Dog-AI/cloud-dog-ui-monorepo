@@ -18,7 +18,7 @@
 
 import * as React from "react";
 import { Input } from "../../components/input/Input";
-import { JsonBlock } from "../JsonBlock";
+import { JsonExplorer } from "../JsonExplorer";
 import {
   formatDuration,
   lifecycleTone,
@@ -70,33 +70,64 @@ export function Ps72ApiKeyField(props: {
   overrideValue: string;
   onOverrideChange: (value: string) => void;
 }) {
+  const overrideMaskAttrs = { type: "password" } as Record<string, string>;
   const helper = props.hasBoundKey
     ? "Defaults to your bound key. Override only if you need to test as a different identity."
     : "You have no API key bound. Ask an administrator to bind a key, or enter an admin override below.";
   return (
-    <div data-testid={`${props.testIdPrefix}-apikey-field`} className="space-y-2 rounded-md border bg-slate-50 p-3">
-      <div className="flex items-center justify-between gap-2">
+    <div data-testid={`${props.testIdPrefix}-apikey-field`} className="min-w-0 space-y-2 rounded-md border bg-slate-50 p-3">
+      <div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
         <span className="text-xs font-semibold uppercase tracking-wide text-slate-600">API key</span>
-        <span className="font-mono text-xs text-slate-700">{props.boundLabel}</span>
+        <span className="min-w-0 max-w-full break-words font-mono text-xs text-slate-700">{props.boundLabel}</span>
       </div>
       <p data-testid={`${props.testIdPrefix}-apikey-helper`} className="text-xs text-slate-500">
         {helper}
       </p>
-      <label className="block text-xs font-medium text-slate-600" htmlFor={`${props.testIdPrefix}-apikey-override`}>
-        Admin override key
-      </label>
-      <Input
-        id={`${props.testIdPrefix}-apikey-override`}
+      <label
+        {...overrideMaskAttrs}
         data-testid={`${props.testIdPrefix}-apikey-override`}
-        type="password"
-        autoComplete="off"
-        value={props.overrideValue}
-        onChange={(event) => props.onOverrideChange(event.target.value)}
-        placeholder="Leave blank to use your bound key"
-        aria-label="Admin override key"
-      />
+        className="block text-xs font-medium text-slate-600"
+        htmlFor={`${props.testIdPrefix}-apikey-override-input`}
+      >
+        Admin override key
+        <Input
+          id={`${props.testIdPrefix}-apikey-override-input`}
+          type="password"
+          autoComplete="off"
+          value={props.overrideValue}
+          onChange={(event) => props.onOverrideChange(event.target.value)}
+          placeholder="Leave blank to use your bound key"
+          aria-label="Admin override key"
+          className="mt-1"
+        />
+      </label>
     </div>
   );
+}
+
+/** DM-MC-07: serialise a tool result for copy/download. */
+function stringifyResult(result: unknown): string {
+  try {
+    return JSON.stringify(result, null, 2);
+  } catch {
+    return String(result);
+  }
+}
+
+function copyResultJson(result: unknown): void {
+  void navigator.clipboard?.writeText(stringifyResult(result));
+}
+
+function downloadResultJson(result: unknown, prefix: string): void {
+  const blob = new Blob([stringifyResult(result)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = `${prefix}-result.json`;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(url);
 }
 
 /**
@@ -123,7 +154,28 @@ export function Ps72ResultMeta(props: {
         {props.result === null ? (
           <p className="text-sm text-slate-500">No result yet. Select a tool and submit a request.</p>
         ) : (
-          <JsonBlock value={props.result} defaultCollapsed={false} />
+          <div className="space-y-2">
+            {/* DM-MC-07: copy/download the full response as JSON. */}
+            <div className="flex flex-wrap justify-end gap-2">
+              <button
+                type="button"
+                data-testid={`${props.testIdPrefix}-result-copy`}
+                onClick={() => copyResultJson(props.result)}
+                className="rounded-md border border-slate-300 bg-white px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50"
+              >
+                Copy JSON
+              </button>
+              <button
+                type="button"
+                data-testid={`${props.testIdPrefix}-result-download`}
+                onClick={() => downloadResultJson(props.result, props.testIdPrefix)}
+                className="rounded-md border border-slate-300 bg-white px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50"
+              >
+                Download JSON
+              </button>
+            </div>
+            <JsonExplorer data={props.result} defaultExpanded title="Result" viewMode="tree" />
+          </div>
         )}
         {props.jobId ? (
           <p className="mt-2 text-sm">
@@ -140,7 +192,7 @@ export function Ps72ResultMeta(props: {
         ) : null}
       </div>
 
-      <div data-testid={`${props.testIdPrefix}-meta`} className="flex flex-wrap items-center gap-2">
+      <div data-testid={`${props.testIdPrefix}-meta`} className="flex min-w-0 flex-wrap items-center gap-2">
         {props.meta ? (
           <>
           <MetaChip
@@ -179,10 +231,10 @@ function MetaChip(props: { testId: string; label: string; value: string; suffix?
   return (
     <span
       data-testid={props.testId}
-      className="inline-flex items-center gap-1 rounded-full border border-slate-300 bg-slate-50 px-3 py-1 text-xs"
+      className="inline-flex max-w-full min-w-0 items-center gap-1 rounded-full border border-slate-300 bg-slate-50 px-3 py-1 text-xs"
     >
       <span className="font-semibold text-slate-500">{props.label}:</span>
-      <span className="font-mono text-slate-800">
+      <span className="min-w-0 overflow-hidden text-ellipsis font-mono text-slate-800">
         {props.value}
         {props.suffix}
       </span>

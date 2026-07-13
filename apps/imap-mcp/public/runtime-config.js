@@ -17,5 +17,5 @@ window.__RUNTIME_CONFIG__ = {
   API_BASE_URL: `${window.location.origin}`,
   MCP_BASE_URL: `${window.location.origin}`,
   AUTH_MODE: "cookie",
-  UI_BASE_PATH: "/ui"
+  UI_BASE_PATH: ""
 };

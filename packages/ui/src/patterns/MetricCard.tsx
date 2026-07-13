@@ -27,6 +27,22 @@ export type MetricCardProps = Readonly<{
   trend?: MetricTrend;
   tone?: "default" | "success" | "warning" | "danger";
   className?: string;
+  /**
+   * Optional activation handler. When provided the card becomes an accessible
+   * button (keyboard-operable, hover/focus affordance) so a dashboard tile can
+   * drill through to a listing. Router navigation stays with the caller \u2014 this
+   * primitive is router-agnostic. (CL-11 / CL-12, W28E-1876.)
+   */
+  onClick?: () => void;
+  /** Accessible label for the clickable card (defaults to the metric label). */
+  ariaLabel?: string;
+  /**
+   * Optional test id forwarded to the root card element so E2E/Playwright
+   * selectors (e.g. `get_by_test_id("kpi-total")`) can target the tile.
+   * (W28R-3018 — the prop was previously dropped, so dashboard KPI tiles were
+   * unaddressable by data-testid.)
+   */
+  "data-testid"?: string;
 }>;
 
 const trendArrow: Record<MetricTrend, string> = {
@@ -36,8 +52,33 @@ const trendArrow: Record<MetricTrend, string> = {
 };
 
 export function MetricCard(props: MetricCardProps) {
+  const clickable = typeof props.onClick === "function";
+  const interactiveProps = clickable
+    ? {
+        role: "button" as const,
+        tabIndex: 0,
+        "aria-label": props.ariaLabel ?? props.label,
+        onClick: props.onClick,
+        onKeyDown: (event: React.KeyboardEvent<HTMLDivElement>) => {
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            props.onClick?.();
+          }
+        },
+      }
+    : {};
+
   return (
-    <Card className={cn("overflow-hidden", props.className)}>
+    <Card
+      className={cn(
+        "overflow-hidden",
+        clickable &&
+          "cursor-pointer transition-colors hover:bg-accent/40 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+        props.className
+      )}
+      data-testid={props["data-testid"]}
+      {...interactiveProps}
+    >
       <CardContent className="py-3">
         <div className="text-xs uppercase tracking-wide text-muted-foreground">{props.label}</div>
         <div className="mt-1 flex items-baseline gap-1">

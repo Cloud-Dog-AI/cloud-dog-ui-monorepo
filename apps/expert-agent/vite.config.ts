@@ -19,35 +19,21 @@ import react from '@vitejs/plugin-react';
 
 const webTarget = process.env.EXPERT_AGENT_WEB_PROXY_TARGET ?? 'http://127.0.0.1:8031';
 
+// W28E-1809C / AGENT-LESSONS §2.4: use anchored RegExp proxy keys so the API/MCP/
+// A2A proxy prefixes do NOT swallow the SPA routes /api-docs, /mcp-console,
+// /a2a-console (PS-WEBUI-URL-CANONICAL legacy aliases). `^/mcp(?:/|$)` matches
+// /mcp and /mcp/x but never /mcp-console. Applied to both dev server and preview.
+const proxy = {
+  '^/api(?:/|$)': { target: webTarget, changeOrigin: true, secure: false },
+  '^/web/api(?:/|$)': { target: webTarget, changeOrigin: true },
+  '^/web/auth(?:/|$)': { target: webTarget, changeOrigin: true },
+  '^/mcp(?:/|$)': { target: webTarget, changeOrigin: true },
+  '^/a2a(?:/|$)': { target: webTarget, changeOrigin: true },
+  '^/runtime-config\\.js$': { target: webTarget, changeOrigin: true },
+};
+
 export default defineConfig({
   plugins: [react()],
-  server: {
-    proxy: {
-      '/api': {
-        target: webTarget,
-        changeOrigin: true,
-        secure: false,
-      },
-      '/runtime-config.js': {
-        target: webTarget,
-        changeOrigin: true,
-      },
-      '/web/api': {
-        target: webTarget,
-        changeOrigin: true,
-      },
-      '/web/auth': {
-        target: webTarget,
-        changeOrigin: true,
-      },
-      '/mcp': {
-        target: webTarget,
-        changeOrigin: true,
-      },
-      '/a2a': {
-        target: webTarget,
-        changeOrigin: true,
-      },
-    },
-  },
+  server: { proxy },
+  preview: { proxy },
 });

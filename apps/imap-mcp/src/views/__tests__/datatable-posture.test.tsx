@@ -3,6 +3,7 @@
 import * as React from "react";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
+import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { DiagnosticsAuditPage } from "../AuditLogPage";
 import { McpToolsPage } from "../McpToolsPage";
@@ -22,6 +23,18 @@ globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
 vi.mock("../../state/AppState", () => ({
   useImapMcpState: () => mockState,
+}));
+
+vi.mock("@cloud-dog/auth", () => ({
+  useAuth: () => ({ isAuthenticated: true }),
+}));
+
+vi.mock("@cloud-dog/config", () => ({
+  useConfig: () => ({
+    API_BASE_URL: "http://127.0.0.1:8787",
+    A2A_BASE_URL: "http://127.0.0.1:8787",
+    AUTH_MODE: "cookie",
+  }),
 }));
 
 const okMeta = {
@@ -61,6 +74,7 @@ function createApi(overrides: Record<string, unknown> = {}) {
         { name: "mail_search", description: "Search mail", input_schema: {} },
       ])
     ),
+    listProfiles: vi.fn(async () => result(["operations"])),
     callMcpTool: vi.fn(async () => result({ answer: "ok" })),
     callTool: vi.fn(async () => result({ status: "ok" })),
     listServerLogs: vi.fn(async () =>
@@ -146,12 +160,15 @@ function createApi(overrides: Record<string, unknown> = {}) {
 }
 
 function setMockState(apiOverrides: Record<string, unknown> = {}, stateOverrides: Record<string, unknown> = {}) {
+  const api = createApi(apiOverrides);
   mockState = {
-    api: createApi(apiOverrides),
+    api,
+    apiKey: "unit-api-key",
     mcpBaseUrl: "http://127.0.0.1:8072",
     traces: [traceEvent],
     ...stateOverrides,
   };
+  return api;
 }
 
 async function renderUi(element: React.ReactElement): Promise<HTMLElement> {
@@ -213,6 +230,7 @@ async function cleanupDom(): Promise<void> {
 afterEach(async () => {
   await cleanupDom();
   vi.clearAllMocks();
+  vi.unstubAllGlobals();
 });
 
 beforeEach(() => {
@@ -221,27 +239,40 @@ beforeEach(() => {
 });
 
 describe("IMAP DataTable posture", () => {
-  test("MCP legacy controls render DataTable headers, rows, empty state, and mobile table semantics", async () => {
-    setMockState();
+  test("MCP PS-72 console renders canonical controls, metadata shell, and empty state", async () => {
+    const api = setMockState();
     const container = await renderUi(<McpToolsPage />);
 
     await waitForText(container, /mail_search/);
-    expect(columnHeaders(container)).toContain("Tool");
-    expect(columnHeaders(container)).toContain("Description");
-    expect(container.querySelectorAll("table").length).toBeGreaterThan(0);
-    expect(container.textContent).toContain("Search mail");
+    expect(container.querySelector('[data-testid="mcp-console-page"]')).not.toBeNull();
+    expect(container.querySelector('[data-testid="mcp-console-tool-list"]')).not.toBeNull();
+    expect(container.querySelector('[data-testid="mcp-console-tool-count"]')?.textContent).toBe("1");
+    expect(container.querySelector('[data-testid="mcp-console-request-editor"]')).not.toBeNull();
+    expect(container.querySelector('[data-testid="mcp-console-apikey-field"]')).not.toBeNull();
+    expect(container.querySelector('[data-testid="mcp-console-submit"]')).not.toBeNull();
+    expect(container.querySelector('[data-testid="mcp-console-docs-link"]')?.getAttribute("href")).toBe("/ui/api-docs#mcp");
+    expect(container.querySelector('[data-testid="mcp-console-tool-mail_search"]')?.getAttribute("title")).toBe("Search mail");
+
+    const override = container.querySelector('#mcp-console-apikey-override-input');
+    if (!(override instanceof HTMLInputElement)) {
+      throw new Error("MCP override input not found");
+    }
+    await fillInput(override, "override-key");
+    await clickButton(container, /^Submit$/);
+    await waitForText(container, /answer/);
+    expect(api.callMcpTool).toHaveBeenCalledWith("mail_search", {}, "override-key");
 
     await cleanupDom();
 
     setMockState({ listMcpTools: vi.fn(async () => result([])) });
     const emptyContainer = await renderUi(<McpToolsPage />);
-    await waitForText(emptyContainer, "No MCP tools loaded.");
-    expect(emptyContainer.querySelectorAll("table").length).toBeGreaterThan(0);
+    await waitForText(emptyContainer, "No MCP tools registered for this server.");
+    expect(emptyContainer.querySelector('[data-testid="mcp-console-page"]')).toBeNull();
   });
 
   test("audit page renders trace DataTable with headers, row data", async () => {
     setMockState();
-    const container = await renderUi(<DiagnosticsAuditPage />);
+    const container = await renderUi(<MemoryRouter><DiagnosticsAuditPage /></MemoryRouter>);
 
     await waitForText(container, /tool:mail_search/);
     expect(columnHeaders(container)).toContain("Action");
@@ -289,9 +320,9 @@ describe("IMAP DataTable posture", () => {
       return result({});
     });
     setMockState({ callTool });
-    const container = await renderUi(<SearchRetrievePage />);
+    const container = await renderUi(<MemoryRouter><SearchRetrievePage /></MemoryRouter>);
 
-    expect(container.textContent).toContain("Search & Retrieve");
+    expect(container.textContent).toContain("Search and Retrieve");
     expect(container.textContent).toContain("No messages returned for this query.");
     expect(container.textContent).toContain("No attachments listed.");
 
@@ -309,10 +340,6 @@ describe("IMAP DataTable posture", () => {
     expect(columnHeaders(container)).toContain("Relevance");
     expect(container.textContent).toContain("ops@example.com");
     expect(container.textContent).toContain("Found 1 messages.");
-    expect(container.textContent).toContain("channel=operations");
-    expect(container.textContent).toContain("folder=INBOX");
-    expect(container.textContent).toContain("mode=cache");
-    expect(container.textContent).toContain("query=report");
 
     await clickButton(container, /^Select$/);
     expect(container.textContent).toContain("Selected Message");

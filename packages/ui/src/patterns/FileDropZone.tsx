@@ -20,7 +20,15 @@ import { cn } from "../utils/cn";
 export type FileDropZoneProps = Readonly<{
   onDrop: (files: File[]) => void;
   accept?: string;
+  multiple?: boolean;
   disabled?: boolean;
+  label?: string;
+  description?: React.ReactNode;
+  dropLabel?: string;
+  browseLabel?: string;
+  disabledDescription?: string;
+  inputLabel?: string;
+  testId?: string;
   className?: string;
 }>;
 
@@ -28,6 +36,13 @@ export function FileDropZone(props: FileDropZoneProps) {
   const [over, setOver] = React.useState(false);
   const inputRef = React.useRef<HTMLInputElement>(null);
   const inputId = React.useId();
+  const describedById = React.useId();
+  const label = props.label ?? "Upload files";
+  const dropLabel = props.dropLabel ?? "Drop files here";
+  const browseLabel = props.browseLabel ?? "Drag and drop files, or click to browse";
+  const activeDescription = "Release to upload selected files.";
+  const disabledDescription = props.disabledDescription ?? "File upload is disabled.";
+  const description = props.disabled ? disabledDescription : props.description;
 
   const handleDragOver = (e: React.DragEvent) => {
     e.preventDefault();
@@ -55,11 +70,14 @@ export function FileDropZone(props: FileDropZoneProps) {
       <div
         role="button"
         tabIndex={props.disabled ? -1 : 0}
-        aria-label="Drop files here or click to browse"
+        aria-label={`${label} — ${browseLabel}`}
         aria-controls={inputId}
         aria-disabled={props.disabled}
+        aria-describedby={description ? describedById : undefined}
+        data-testid={props.testId ?? "file-drop-zone"}
+        data-state={props.disabled ? "disabled" : over ? "drag-over" : "idle"}
         className={cn(
-          "flex flex-col items-center justify-center gap-2 rounded-md border-2 border-dashed p-8 text-center transition-colors",
+          "flex min-h-32 flex-col items-center justify-center gap-2 rounded-md border-2 border-dashed p-6 text-center transition-colors sm:p-8",
           "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
           over && !props.disabled ? "border-primary bg-primary/5" : "border-input",
           props.disabled ? "cursor-not-allowed opacity-50" : "cursor-pointer hover:border-primary/50",
@@ -76,9 +94,15 @@ export function FileDropZone(props: FileDropZoneProps) {
           }
         }}
       >
-        <span className="text-sm text-muted-foreground">
-          {over ? "Drop files here" : "Drag and drop files, or click to browse"}
+        <span className="text-sm font-medium text-foreground">
+          {over ? dropLabel : label}
         </span>
+        <span className="text-sm text-muted-foreground">{over ? activeDescription : browseLabel}</span>
+        {description ? (
+          <span id={describedById} className="text-xs text-muted-foreground">
+            {description}
+          </span>
+        ) : null}
       </div>
       <input
         id={inputId}
@@ -86,8 +110,9 @@ export function FileDropZone(props: FileDropZoneProps) {
         type="file"
         className="sr-only"
         accept={props.accept}
-        multiple
-        aria-label="Select files to upload"
+        multiple={props.multiple ?? true}
+        disabled={props.disabled}
+        aria-label={props.inputLabel ?? "Select files to upload"}
         onChange={handleChange}
         tabIndex={-1}
       />

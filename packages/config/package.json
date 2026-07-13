@@ -19,7 +19,6 @@
     }
   },
   "publishConfig": {
-    "registry": "https://registry.npmjs.org/",
     "access": "restricted"
   },
   "repository": {

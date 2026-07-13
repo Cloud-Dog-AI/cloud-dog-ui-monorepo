@@ -956,7 +956,7 @@ export function ContextPage() {
                   columns={relationshipColumns}
                   rows={relationshipRows}
                   emptyMessage="No relationships available."
-                  getRowId={(row, index) => `${row.table ?? 'relationship'}-${index}`}
+                  getRowId={(row) => `${row.table ?? row.source ?? 'relationship'}-${safeStringify(row)}`}
                   tableId="sql-agent-context-relationships"
                 />
               ) : null}
@@ -966,7 +966,7 @@ export function ContextPage() {
                   columns={sampleColumns}
                   rows={sampleRows.slice(0, 5)}
                   emptyMessage="No sample rows available."
-                  getRowId={(row, index) => `${getTableName(selectedTable)}-sample-${index}-${safeStringify(row)}`}
+                  getRowId={(row) => `${getTableName(selectedTable)}-sample-${safeStringify(row)}`}
                   tableId="sql-agent-context-samples"
                 />
               ) : null}

@@ -23,12 +23,15 @@ import {
   CardContent,
   CardHeader,
   DataTable,
+  Dialog,
   DocumentViewer,
   EntityDialog,
+  FileBrowser,
+  FileDropZone,
   FolderTree,
-  Input,
   JsonBlock,
   Label,
+  SearchPanel,
   Tabs,
   TabsContent,
   TabsList,
@@ -36,6 +39,7 @@ import {
   Textarea,
   type DataColumn,
   type EntityFieldDef,
+  type FileItem,
 } from "@cloud-dog/ui";
 import { useGitMcpState } from "../state/AppState";
 import {
@@ -74,8 +78,14 @@ function downloadBase64(path: string, base64Content: string) {
   const anchor = document.createElement("a");
   anchor.href = url;
   anchor.download = repoBaseName(path);
+  // The anchor must be connected to the document for the click to reliably start a
+  // download (an orphan <a> is ignored by some browsers/automation engines), and the
+  // object URL must outlive the click — revoking it synchronously cancels the in-flight
+  // download before the browser reads the blob. Attach, click, then defer cleanup.
+  document.body.appendChild(anchor);
   anchor.click();
-  URL.revokeObjectURL(url);
+  anchor.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 30_000);
 }
 
 export function RepositoryBrowserPage() {
@@ -89,9 +99,12 @@ export function RepositoryBrowserPage() {
   const [treeEntries, setTreeEntries] = React.useState<RepoDirEntry[]>([]);
   const [currentPath, setCurrentPath] = React.useState(".");
   const [selectedPath, setSelectedPath] = React.useState("");
+  const [entryQuery, setEntryQuery] = React.useState("");
   const [selectedContent, setSelectedContent] = React.useState("");
   const [editorContent, setEditorContent] = React.useState("");
   const [viewerTab, setViewerTab] = React.useState("preview");
+  // GM-BR-05: the file viewer is a modal dialog (opened on file select), not an always-present inline sub-panel.
+  const [viewerOpen, setViewerOpen] = React.useState(false);
   const [status, setStatus] = React.useState("");
   const [error, setError] = React.useState<string | null>(null);
   const [dialogOpen, setDialogOpen] = React.useState(false);
@@ -154,8 +167,37 @@ export function RepositoryBrowserPage() {
     setSelectedPath(path);
     setSelectedContent(content);
     setEditorContent(content);
+    setViewerTab("preview");
+    setViewerOpen(true);
     setStatus(`Loaded ${path}.`);
   }, [runApiTool, session.workspaceId]);
+
+  const uploadRepositoryFiles = React.useCallback(async (files: File[]) => {
+    if (!session.workspaceId || !files.length) return;
+    setError(null);
+    for (const file of files) {
+      const result = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result ?? ""));
+        reader.onerror = () => reject(new Error(`Failed to read ${file.name}.`));
+        reader.readAsDataURL(file);
+      });
+      const base64Content = result.includes(",") ? result.split(",").pop() ?? "" : result;
+      const outcome = await runApiTool("file_upload", {
+        workspace_id: session.workspaceId,
+        path: joinRepoPath(currentPath, file.name),
+        base64_content: base64Content,
+        overwrite: true,
+      });
+      if (!outcome.ok) {
+        setError(outcome.errorMessage || `Failed to upload ${file.name}.`);
+        return;
+      }
+    }
+    setStatus(`Uploaded ${files.length} file${files.length === 1 ? "" : "s"}.`);
+    await loadTree();
+    await loadDirectory(currentPath, false);
+  }, [currentPath, loadDirectory, loadTree, runApiTool, session.workspaceId]);
 
   React.useEffect(() => {
     if (!session.workspaceId) return;
@@ -167,8 +209,24 @@ export function RepositoryBrowserPage() {
     () => (entries.length ? entries : filterEntriesForPath(treeEntries, currentPath)),
     [currentPath, entries, treeEntries],
   );
+  const filteredEntries = React.useMemo(() => {
+    const q = entryQuery.trim().toLowerCase();
+    if (!q) return visibleEntries;
+    return visibleEntries.filter((row) => `${repoBaseName(row.path)} ${row.path} ${row.type}`.toLowerCase().includes(q));
+  }, [entryQuery, visibleEntries]);
 
   const folderTree = React.useMemo(() => buildFolderTree(treeEntries), [treeEntries]);
+  const entryByPath = React.useMemo(() => new Map(visibleEntries.map((entry) => [normaliseRepoPath(entry.path), entry])), [visibleEntries]);
+  const browserFiles = React.useMemo<FileItem[]>(
+    () => visibleEntries.map((entry) => ({
+      name: repoBaseName(entry.path),
+      path: normaliseRepoPath(entry.path),
+      kind: entry.type === "dir" ? "directory" : "file",
+      status: entry.type,
+      testId: `git-repository-entry-${normaliseRepoPath(entry.path).replace(/[^a-zA-Z0-9_-]/g, "-")}`,
+    })),
+    [visibleEntries]
+  );
 
   const columns: DataColumn<RepoDirEntry>[] = [
     {
@@ -312,16 +370,14 @@ export function RepositoryBrowserPage() {
     await loadDirectory(currentPath, false);
   };
 
-  const selectedInfo = React.useMemo(
-    () => (selectedPath ? { path: selectedPath, bytes: selectedContent.length, parent: repoParentPath(selectedPath) } : null),
-    [selectedContent.length, selectedPath],
-  );
-
   return (
     <div className="space-y-6">
       <header className="flex flex-wrap items-center gap-3">
         <h1 className="text-2xl font-bold">Repository Browser</h1>
         {selectedPath ? <Badge variant="secondary">{selectedPath}</Badge> : null}
+        {selectedPath ? (
+          <Button size="sm" variant="secondary" onClick={() => setViewerOpen(true)}>Open file viewer</Button>
+        ) : null}
       </header>
 
       <WorkspaceSessionCard
@@ -329,7 +385,7 @@ export function RepositoryBrowserPage() {
         onOpenWorkspace={openWorkspace}
         status={status}
         error={error}
-        title="Repository context"
+        title="Repository Context"
         actions={
           <>
             <Button variant="secondary" onClick={() => void loadTree()} disabled={!session.workspaceId}>Refresh tree</Button>
@@ -342,44 +398,94 @@ export function RepositoryBrowserPage() {
                 <Button variant="secondary" onClick={() => { setDialogState({ mode: "create-folder", path: joinRepoPath(currentPath, "new-folder"), content: "" }); setDialogOpen(true); }} disabled={!session.workspaceId}>
                   New folder
                 </Button>
-                <label className="inline-flex items-center gap-2">
-                  <Label htmlFor="repository-upload" className="sr-only">Upload file</Label>
-                  <Input
-                    id="repository-upload"
-                    type="file"
-                    className="max-w-xs"
-                    disabled={!session.workspaceId}
-                    onChange={(event) => {
-                      const file = event.target.files?.[0];
-                      if (!file || !session.workspaceId) return;
-                      const reader = new FileReader();
-                      reader.onload = () => {
-                        const result = String(reader.result ?? "");
-                        const base64Content = result.includes(",") ? result.split(",").pop() ?? "" : result;
-                        void (async () => {
-                          const outcome = await runApiTool("file_upload", {
-                            workspace_id: session.workspaceId,
-                            path: joinRepoPath(currentPath, file.name),
-                            base64_content: base64Content,
-                            overwrite: true,
-                          });
-                          if (!outcome.ok) {
-                            setError(outcome.errorMessage || `Failed to upload ${file.name}.`);
-                            return;
-                          }
-                          setStatus(`Uploaded ${file.name}.`);
-                          await loadTree();
-                          await loadDirectory(currentPath, false);
-                        })();
-                      };
-                      reader.readAsDataURL(file);
-                    }}
-                  />
-                </label>
               </>
             ) : null}
           </>
         }
+      />
+
+      <FileDropZone
+        disabled={!access.canWriteRepository || !session.workspaceId}
+        label="Upload repository file"
+        description={`Files are uploaded to ${currentPath}.`}
+        disabledDescription={!session.workspaceId ? "Open a repository workspace before uploading files." : "Your current role cannot upload repository files."}
+        onDrop={(files) => void uploadRepositoryFiles(files)}
+        testId="git-repository-file-drop-zone"
+      />
+
+      <FileBrowser
+        folders={folderTree}
+        files={browserFiles}
+        currentPath={currentPath}
+        rootLabel="repo"
+        filesLabel="Repository entries"
+        errorMessage={error}
+        statusMessage={`${browserFiles.length} entries visible`}
+        emptyMessage="No files or folders found in this location."
+        readOnly={!access.canWriteRepository}
+        selectedPath={selectedPath}
+        onNavigate={(path) => void loadDirectory(path)}
+        onRefresh={() => void loadDirectory(currentPath)}
+        onCreateFolder={access.canWriteRepository ? () => { setDialogState({ mode: "create-folder", path: joinRepoPath(currentPath, "new-folder"), content: "" }); setDialogOpen(true); } : undefined}
+        onOpen={(path) => {
+          const entry = entryByPath.get(path);
+          if (!entry) return;
+          if (entry.type === "dir") {
+            void loadDirectory(path);
+            return;
+          }
+          void loadFile(path);
+        }}
+        onDownload={(path) => {
+          const entry = entryByPath.get(path);
+          if (!entry || entry.type !== "file") return;
+          void (async () => {
+            const outcome = await runApiTool("file_download", { workspace_id: session.workspaceId, path });
+            if (!outcome.ok) {
+              setError(outcome.errorMessage || `Failed to download ${path}.`);
+              return;
+            }
+            downloadBase64(path, String((outcome.data as Record<string, unknown>).base64_content ?? ""));
+          })();
+        }}
+        onDelete={access.canWriteRepository ? (path) => {
+          const entry = entryByPath.get(path);
+          if (!entry) return;
+          void (async () => {
+            const toolName = entry.type === "dir" ? "dir_rmdir" : "file_delete";
+            const args = entry.type === "dir"
+              ? { workspace_id: session.workspaceId, path, recursive: true }
+              : { workspace_id: session.workspaceId, path };
+            const outcome = await runApiTool(toolName, args);
+            if (!outcome.ok) {
+              setError(outcome.errorMessage || `Failed to delete ${path}.`);
+              return;
+            }
+            setStatus(`Deleted ${path}.`);
+            if (selectedPath === path) {
+              setSelectedPath("");
+              setSelectedContent("");
+              setEditorContent("");
+            }
+            await loadTree();
+            await loadDirectory(currentPath, false);
+          })();
+        } : undefined}
+        getFileActions={(file) => [
+          ...(access.canWriteRepository
+            ? [
+                { id: "rename", label: "Rename", onClick: () => { setDialogState({ mode: "rename", path: file.path, content: file.path }); setDialogOpen(true); } },
+                ...(file.kind === "file" ? [{ id: "copy", label: "Copy", onClick: () => { setDialogState({ mode: "copy", path: `${file.path}.copy`, content: file.path }); setDialogOpen(true); } }] : []),
+              ]
+            : []),
+        ]}
+        deleteConfirmation={{
+          enabled: true,
+          title: "Delete repository path",
+          description: "Permanently delete this repository path from the active workspace.",
+          confirmLabel: "Delete path",
+        }}
+        testId="git-repository-file-browser"
       />
 
       <div className="grid gap-6 xl:grid-cols-[0.8fr_1.2fr]">
@@ -398,112 +504,117 @@ export function RepositoryBrowserPage() {
           </CardContent>
         </Card>
 
-        <Card>
-          <CardHeader>
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <h2 className="text-xl font-semibold">Current folder</h2>
-              <div className="flex items-center gap-2 text-sm">
+        <SearchPanel
+          title="Catalogue"
+          description="Browse and search files and folders in the active workspace."
+          filters={[]}
+          query={entryQuery}
+          onQueryChange={setEntryQuery}
+          onSearch={(nextQuery) => setEntryQuery(nextQuery)}
+          onClear={() => setEntryQuery("")}
+          queryLabel="Search"
+          queryAriaLabel="Search repository entries"
+          placeholder="Search path, name, or type"
+          resultsLabel="Catalogue entries"
+          emptyMessage="No catalogue entries found."
+          headerActions={
+            <>
                 <Button variant="secondary" size="sm" onClick={() => void loadDirectory(repoParentPath(currentPath))} disabled={currentPath === "."}>
                   Up
                 </Button>
                 <Badge>{currentPath}</Badge>
-              </div>
-            </div>
-          </CardHeader>
-          <CardContent>
+            </>
+          }
+          status={`${filteredEntries.length} catalogue entries visible`}
+          results={
             <DataTable
               tableId="git-mcp.repository-browser.columns"
               columns={columns}
-              rows={visibleEntries}
+              rows={filteredEntries}
               getRowId={(row) => row.path}
               emptyMessage="No files or folders found in this location."
               columnPickerEnabled={true}
             />
-          </CardContent>
-        </Card>
+          }
+        />
       </div>
 
-      <div className="grid gap-6 xl:grid-cols-[1.2fr_0.8fr]">
-        <Card>
-          <CardHeader>
+      {/* GM-BR-05: file viewer is a modal dialog (opened on file select), not an inline sub-panel.
+          GM-BR-06: the redundant "Selection summary" JsonBlock panel has been removed. */}
+      <Dialog open={viewerOpen && Boolean(selectedPath)} onOpenChange={setViewerOpen} label="File viewer">
+        {selectedPath ? (
+          <div className="space-y-4">
             <div className="flex flex-wrap items-center justify-between gap-3">
-              <h2 className="text-xl font-semibold">File viewer</h2>
-              {selectedPath ? <Badge variant="secondary">{selectedPath}</Badge> : null}
+              <h2 className="text-lg font-semibold">File Viewer</h2>
+              <Badge variant="secondary">{selectedPath}</Badge>
             </div>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            {!selectedPath ? (
-              <p className="text-sm text-muted-foreground">Select a file to preview or edit it.</p>
-            ) : (
-              <Tabs value={viewerTab} onValueChange={setViewerTab}>
-                <TabsList>
-                  <TabsTrigger value="preview">Preview</TabsTrigger>
-                  <TabsTrigger value="editor">Editor</TabsTrigger>
-                  <TabsTrigger value="raw">Raw JSON</TabsTrigger>
-                </TabsList>
-                <TabsContent value="preview">
-                  <DocumentViewer
-                    title={repoBaseName(selectedPath)}
-                    content={selectedContent}
-                    downloadFilename={repoBaseName(selectedPath)}
-                    maxHeight="520px"
+            <Tabs value={viewerTab} onValueChange={setViewerTab}>
+              <TabsList>
+                <TabsTrigger value="preview">Preview</TabsTrigger>
+                <TabsTrigger value="editor">Editor</TabsTrigger>
+                <TabsTrigger value="raw">Raw JSON</TabsTrigger>
+              </TabsList>
+              <TabsContent value="preview">
+                <DocumentViewer
+                  title={repoBaseName(selectedPath)}
+                  content={selectedContent}
+                  downloadFilename={repoBaseName(selectedPath)}
+                  maxHeight="520px"
+                />
+              </TabsContent>
+              <TabsContent value="editor">
+                <div className="space-y-3">
+                  <Label htmlFor="repository-editor">Inline editor</Label>
+                  <Textarea
+                    id="repository-editor"
+                    rows={18}
+                    value={editorContent}
+                    onChange={(event) => setEditorContent(event.target.value)}
+                    disabled={!access.canWriteRepository}
                   />
-                </TabsContent>
-                <TabsContent value="editor">
-                  <div className="space-y-3">
-                    <Label htmlFor="repository-editor">Inline editor</Label>
-                    <Textarea
-                      id="repository-editor"
-                      rows={18}
-                      value={editorContent}
-                      onChange={(event) => setEditorContent(event.target.value)}
-                      disabled={!access.canWriteRepository}
-                    />
-                    <div className="flex flex-wrap gap-2">
-                      <Button
-                        onClick={async () => {
-                          const outcome = await runApiTool("file_write", {
-                            workspace_id: session.workspaceId,
-                            path: selectedPath,
-                            content: editorContent,
-                            overwrite: true,
-                          });
-                          if (!outcome.ok) {
-                            setError(outcome.errorMessage || `Failed to save ${selectedPath}.`);
-                            return;
-                          }
-                          setSelectedContent(editorContent);
-                          setStatus(`Saved ${selectedPath}.`);
-                          await loadTree();
-                          await loadDirectory(currentPath, false);
-                        }}
-                        disabled={!access.canWriteRepository || !selectedPath || !session.workspaceId}
-                      >
-                        Save file
-                      </Button>
-                      <Button variant="secondary" onClick={() => setEditorContent(selectedContent)} disabled={!selectedPath}>
-                        Reset editor
-                      </Button>
-                    </div>
+                  <div className="flex flex-wrap gap-2">
+                    <Button
+                      onClick={async () => {
+                        const outcome = await runApiTool("file_write", {
+                          workspace_id: session.workspaceId,
+                          path: selectedPath,
+                          content: editorContent,
+                          overwrite: true,
+                        });
+                        if (!outcome.ok) {
+                          setError(outcome.errorMessage || `Failed to save ${selectedPath}.`);
+                          return;
+                        }
+                        setSelectedContent(editorContent);
+                        setStatus(`Saved ${selectedPath}.`);
+                        await loadTree();
+                        await loadDirectory(currentPath, false);
+                      }}
+                      disabled={!access.canWriteRepository || !selectedPath || !session.workspaceId}
+                    >
+                      Save file
+                    </Button>
+                    <Button variant="secondary" onClick={() => setEditorContent(selectedContent)} disabled={!selectedPath}>
+                      Reset editor
+                    </Button>
                   </div>
-                </TabsContent>
-                <TabsContent value="raw">
-                  <JsonBlock title="Selected file" value={{ path: selectedPath, content: selectedContent }} defaultCollapsed={false} />
-                </TabsContent>
-              </Tabs>
-            )}
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
-            <h2 className="text-xl font-semibold">Selection summary</h2>
-          </CardHeader>
-          <CardContent>
-            <JsonBlock title="Repository selection" value={selectedInfo ?? { path: currentPath, entries: visibleEntries.length }} defaultCollapsed={false} />
-          </CardContent>
-        </Card>
-      </div>
+                </div>
+              </TabsContent>
+              <TabsContent value="raw">
+                <JsonBlock
+                  title="Selected file"
+                  value={{
+                    path: selectedPath,
+                    bytes: new TextEncoder().encode(selectedContent).length,
+                    content: selectedContent,
+                  }}
+                  defaultCollapsed={false}
+                />
+              </TabsContent>
+            </Tabs>
+          </div>
+        ) : null}
+      </Dialog>
 
       <EntityDialog
         open={dialogOpen}

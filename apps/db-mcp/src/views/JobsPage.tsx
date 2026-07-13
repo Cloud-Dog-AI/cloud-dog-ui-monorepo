@@ -32,8 +32,10 @@ import {
   TabsContent,
   TabsList,
   TabsTrigger,
+  createDataTableActionColumn,
   type BulkAction,
   type DataColumn,
+  type DataTableAction,
 } from "@cloud-dog/ui";
 import { useDbMcpState } from "../state/AppState";
 import type { JobSummary, PrincipalSummary } from "../lib/types";
@@ -123,7 +125,7 @@ function unique(values: string[]): string[] {
 }
 
 function statusBadgeStyle(status: string): React.CSSProperties | undefined {
-  if (status === "succeeded") return { backgroundColor: "rgb(5, 150, 105)" };
+  if (status === "succeeded") return { backgroundColor: "rgb(4, 120, 87)" };
   if (["failed", "dead_lettered", "timeout", "timed_out"].includes(status)) return { backgroundColor: "rgb(185, 28, 28)" };
   if (["retry_wait", "blocked", "paused"].includes(status)) return { backgroundColor: "rgb(254, 243, 199)" };
   return undefined;
@@ -150,21 +152,6 @@ function StatusBadge({ status }: { status: string }) {
   );
 }
 
-function ToggleChip(props: { label: string; selected: boolean; onClick: () => void; testId?: string }) {
-  return (
-    <Button
-      type="button"
-      size="sm"
-      variant={props.selected ? "default" : "secondary"}
-      aria-pressed={props.selected}
-      data-testid={props.testId}
-      onClick={props.onClick}
-    >
-      {props.label}
-    </Button>
-  );
-}
-
 function hasAdminRights(principal: PrincipalSummary | null, authUser: ReturnType<typeof useAuth>["user"]): boolean {
   const roles = new Set([...(principal?.roles ?? []), ...(authUser?.roles ?? [])]);
   const permissions = new Set([...(principal?.permissions ?? []), ...(authUser?.permissions ?? [])]);
@@ -176,7 +163,7 @@ export function JobsPage() {
   const { api } = useDbMcpState();
   const [rows, setRows] = React.useState<JobSummary[]>([]);
   const [principal, setPrincipal] = React.useState<PrincipalSummary | null>(null);
-  const [loading, setLoading] = React.useState(false);
+  const [loading, setLoading] = React.useState(true);
   const [loadError, setLoadError] = React.useState<string | null>(null);
   const [inlineError, setInlineError] = React.useState<string | null>(null);
   const [actionError, setActionError] = React.useState<string | null>(null);
@@ -187,18 +174,38 @@ export function JobsPage() {
   const [page, setPage] = React.useState(1);
   const [pageSize, setPageSize] = React.useState(25);
   const [jobIdSearch, setJobIdSearch] = React.useState("");
-  const [statusFilters, setStatusFilters] = React.useState<Set<string>>(() => new Set());
-  const [typeFilters, setTypeFilters] = React.useState<Set<string>>(() => new Set());
-  const [actorFilters, setActorFilters] = React.useState<Set<string>>(() => new Set());
+  // DM-J-01: single-select native select-list filters (platform `Select`), replacing
+  // the service-local ToggleChip primitive. Empty string == "All".
+  const [statusFilter, setStatusFilter] = React.useState("");
+  const [typeFilter, setTypeFilter] = React.useState("");
+  const [actorFilter, setActorFilter] = React.useState("");
   const [dateFrom, setDateFrom] = React.useState("");
   const [dateTo, setDateTo] = React.useState("");
   const [refreshVersion, setRefreshVersion] = React.useState(0);
   const [urlJobChecked, setUrlJobChecked] = React.useState("");
   const isAdmin = hasAdminRights(principal, auth.user);
+  // CX-160: only the FIRST load shows the loading state (which blanks the table).
+  // Subsequent poll/refresh updates rows in place so the shared DataTable merges
+  // by getRowId and the user's scroll position + selection survive.
+  const firstLoadRef = React.useRef(true);
+  const scrollRestoreRef = React.useRef<number | null>(null);
+  const restoreScrollAfterPaint = React.useCallback(() => {
+    const target = scrollRestoreRef.current;
+    if (target === null) return;
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => {
+        const nextTarget = scrollRestoreRef.current;
+        if (nextTarget !== null) {
+          window.scrollTo({ top: nextTarget, left: 0 });
+          scrollRestoreRef.current = null;
+        }
+      });
+    });
+  }, []);
 
   React.useEffect(() => {
     let cancelled = false;
-    setLoading(true);
+    if (firstLoadRef.current) setLoading(true);
     setLoadError(null);
     void Promise.all([
       api.listJobs(1000),
@@ -213,14 +220,27 @@ export function JobsPage() {
         if (!cancelled) setLoadError(error instanceof Error ? error.message : String(error));
       })
       .finally(() => {
-        if (!cancelled) setLoading(false);
+        if (!cancelled) {
+          setLoading(false);
+          firstLoadRef.current = false;
+          restoreScrollAfterPaint();
+        }
       });
     return () => {
       cancelled = true;
     };
-  }, [api, refreshVersion]);
+  }, [api, refreshVersion, restoreScrollAfterPaint]);
 
-  const refresh = React.useCallback(() => setRefreshVersion((value) => value + 1), []);
+  const refresh = React.useCallback(() => {
+    scrollRestoreRef.current = window.scrollY;
+    setRefreshVersion((value) => value + 1);
+  }, []);
+
+  // CX-160: poll the jobs list in place every 20s (matches the accepted cross-service pattern).
+  React.useEffect(() => {
+    const timer = window.setInterval(() => setRefreshVersion((value) => value + 1), 20_000);
+    return () => window.clearInterval(timer);
+  }, []);
 
   const statusOptions = React.useMemo(() => unique([...STATUS_OPTIONS, ...rows.map(lifecycleStatus)]), [rows]);
   const typeOptions = React.useMemo(() => unique(rows.map(jobType)), [rows]);
@@ -233,16 +253,16 @@ export function JobsPage() {
     return rows
       .filter((row) => {
         if (exactId && jobId(row) !== exactId) return false;
-        if (statusFilters.size && !statusFilters.has(lifecycleStatus(row))) return false;
-        if (typeFilters.size && !typeFilters.has(jobType(row))) return false;
-        if (isAdmin && actorFilters.size && !actorFilters.has(actorName(row))) return false;
+        if (statusFilter && lifecycleStatus(row) !== statusFilter) return false;
+        if (typeFilter && jobType(row) !== typeFilter) return false;
+        if (isAdmin && actorFilter && actorName(row) !== actorFilter) return false;
         const createdMs = parseDateMs(timestampFor(row, "created"));
         if (fromMs && createdMs < fromMs) return false;
         if (toMs && createdMs > toMs) return false;
         return true;
       })
       .sort((a, b) => parseDateMs(timestampFor(b, "created")) - parseDateMs(timestampFor(a, "created")));
-  }, [actorFilters, dateFrom, dateTo, isAdmin, jobIdSearch, rows, statusFilters, typeFilters]);
+  }, [actorFilter, dateFrom, dateTo, isAdmin, jobIdSearch, rows, statusFilter, typeFilter]);
 
   const totalPages = Math.max(1, Math.ceil(filteredRows.length / pageSize));
   React.useEffect(() => {
@@ -250,7 +270,7 @@ export function JobsPage() {
   }, [page, totalPages]);
   React.useEffect(() => {
     setPage(1);
-  }, [actorFilters, dateFrom, dateTo, jobIdSearch, statusFilters, typeFilters]);
+  }, [actorFilter, dateFrom, dateTo, jobIdSearch, statusFilter, typeFilter]);
 
   const metrics = React.useMemo(() => {
     let queued = 0;
@@ -266,14 +286,6 @@ export function JobsPage() {
     return { total: rows.length, queued, active, failed24h };
   }, [rows]);
 
-  const toggleSetValue = React.useCallback((setter: React.Dispatch<React.SetStateAction<Set<string>>>, value: string) => {
-    setter((current) => {
-      const next = new Set(current);
-      if (next.has(value)) next.delete(value);
-      else next.add(value);
-      return next;
-    });
-  }, []);
 
   const selectedRowsFor = React.useCallback((ids: string[]) => rows.filter((row) => ids.includes(jobId(row))), [rows]);
 
@@ -422,14 +434,24 @@ export function JobsPage() {
       },
       {
         id: "log_link",
-        header: "Log link",
-        cell: (row) => <a className="text-primary underline-offset-4 hover:underline" href={`/logs?job_id=${encodeURIComponent(jobId(row))}`}>Logs</a>,
+        header: "Audit & Log link",
+        cell: (row) => <a className="text-primary underline-offset-4 hover:underline" href={`/audit-log?job_id=${encodeURIComponent(jobId(row))}`}>Audit & Log</a>,
         sortable: true,
         sortValue: jobId,
       },
       { id: "retry_count", header: "Retry count", cell: (row) => retryCount(row), sortable: true, sortValue: retryCount },
+      createDataTableActionColumn<JobSummary>((row) => {
+        const status = lifecycleStatus(row);
+        const actions: DataTableAction<JobSummary>[] = [
+          { id: "detail", label: "Detail", onClick: (r) => { void openDetail(r); } },
+        ];
+        if (CANCELLABLE.has(status)) actions.push({ id: "cancel", label: "Cancel", onClick: (r) => requestBulkAction("cancel", [jobId(r)]) });
+        if (RETRYABLE.has(status)) actions.push({ id: "retry", label: "Retry", onClick: (r) => requestBulkAction("retry", [jobId(r)]) });
+        if (isAdmin && TERMINAL.has(status)) actions.push({ id: "delete", label: "Delete", destructive: true, onClick: (r) => requestBulkAction("delete", [jobId(r)]) });
+        return actions;
+      }),
     ],
-    [openDetail],
+    [isAdmin, openDetail, requestBulkAction],
   );
 
   const detailStatus = detailJob ? lifecycleStatus(detailJob) : "";
@@ -437,7 +459,7 @@ export function JobsPage() {
 
   return (
     <div className="space-y-6">
-      <header className="flex flex-wrap items-center justify-between gap-3">
+      <header className="sticky top-0 z-20 flex flex-wrap items-center justify-between gap-3 bg-background/95 py-2 backdrop-blur">
         <div>
           <h1 className="text-2xl font-semibold">Jobs</h1>
           <p className="text-sm text-muted-foreground">Queue lifecycle, RBAC controls, filters, and job inspection.</p>
@@ -452,58 +474,54 @@ export function JobsPage() {
         <MetricCard label="Failed (24h)" value={metrics.failed24h} tone={metrics.failed24h > 0 ? "warning" : "default"} />
       </div>
 
-      <div className="space-y-3 rounded-md border border-border bg-background p-4">
-        <div className="grid gap-3 md:grid-cols-[minmax(14rem,20rem)_1fr]">
+      {/* DM-J-02: all filters inline on one wrapping row. DM-J-01: Status/Type/Actor
+          are platform `Select` dropdowns (single-select, "All" default), not chips. */}
+      <div className="rounded-md border border-border bg-background p-4">
+        <div className="flex flex-wrap items-end gap-3">
           <label className="text-sm font-medium">
             <span className="mb-1 block">Search Job ID</span>
-            <Input placeholder="Exact Job ID" value={jobIdSearch} onChange={(event) => setJobIdSearch(event.target.value)} data-testid="jobs-search-job-id" />
+            <Input className="w-56" placeholder="Exact Job ID" value={jobIdSearch} onChange={(event) => setJobIdSearch(event.target.value)} data-testid="jobs-search-job-id" />
           </label>
-          <div className="flex flex-wrap items-end gap-3">
-            <label className="text-sm font-medium">
-              <span className="mb-1 block">From</span>
-              <Input type="date" value={dateFrom} onChange={(event) => setDateFrom(event.target.value)} />
-            </label>
-            <label className="text-sm font-medium">
-              <span className="mb-1 block">To</span>
-              <Input type="date" value={dateTo} onChange={(event) => setDateTo(event.target.value)} />
-            </label>
-            <label className="text-sm font-medium">
-              <span className="mb-1 block">Page size</span>
-              <Select value={pageSize} onChange={(event) => setPageSize(Number(event.target.value))}>
-                {[10, 25, 50, 100].map((size) => <option key={size} value={size}>{size}</option>)}
+          <label className="text-sm font-medium">
+            <span className="mb-1 block">Status</span>
+            <Select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)} data-testid="jobs-filter-status">
+              <option value="">All statuses</option>
+              {statusOptions.map((status) => <option key={status} value={status}>{status}</option>)}
+            </Select>
+          </label>
+          <label className="text-sm font-medium">
+            <span className="mb-1 block">Type</span>
+            <Select value={typeFilter} onChange={(event) => setTypeFilter(event.target.value)} data-testid="jobs-filter-type">
+              <option value="">All types</option>
+              {(typeOptions.length ? typeOptions : ["discovery.rebuild", "discovery.sync_profile", "discovery.sync_entity"]).map((type) => (
+                <option key={type} value={type}>{type}</option>
+              ))}
+            </Select>
+          </label>
+          {isAdmin ? (
+            <label className="text-sm font-medium" data-testid="jobs-actor-filter">
+              <span className="mb-1 block">Actor</span>
+              <Select value={actorFilter} onChange={(event) => setActorFilter(event.target.value)} data-testid="jobs-filter-actor">
+                <option value="">All actors</option>
+                {actorOptions.map((actor) => <option key={actor} value={actor}>{actor}</option>)}
               </Select>
             </label>
-          </div>
+          ) : null}
+          <label className="text-sm font-medium">
+            <span className="mb-1 block">From</span>
+            <Input type="date" value={dateFrom} onChange={(event) => setDateFrom(event.target.value)} />
+          </label>
+          <label className="text-sm font-medium">
+            <span className="mb-1 block">To</span>
+            <Input type="date" value={dateTo} onChange={(event) => setDateTo(event.target.value)} />
+          </label>
+          <label className="text-sm font-medium">
+            <span className="mb-1 block">Page size</span>
+            <Select value={pageSize} onChange={(event) => setPageSize(Number(event.target.value))}>
+              {[10, 25, 50, 100].map((size) => <option key={size} value={size}>{size}</option>)}
+            </Select>
+          </label>
         </div>
-
-        <div>
-          <p className="mb-2 text-xs font-semibold uppercase text-muted-foreground">Status</p>
-          <div className="flex flex-wrap gap-2">
-            {statusOptions.map((status) => (
-              <ToggleChip key={status} label={status} selected={statusFilters.has(status)} onClick={() => toggleSetValue(setStatusFilters, status)} testId={`filter-status-${status}`} />
-            ))}
-          </div>
-        </div>
-
-        <div>
-          <p className="mb-2 text-xs font-semibold uppercase text-muted-foreground">Type</p>
-          <div className="flex flex-wrap gap-2">
-            {(typeOptions.length ? typeOptions : ["discovery.rebuild", "discovery.sync_profile", "discovery.sync_entity"]).map((type) => (
-              <ToggleChip key={type} label={type} selected={typeFilters.has(type)} onClick={() => toggleSetValue(setTypeFilters, type)} testId={`filter-type-${type}`} />
-            ))}
-          </div>
-        </div>
-
-        {isAdmin ? (
-          <div data-testid="jobs-actor-filter">
-            <p className="mb-2 text-xs font-semibold uppercase text-muted-foreground">Actor</p>
-            <div className="flex flex-wrap gap-2">
-              {actorOptions.map((actor) => (
-                <ToggleChip key={actor} label={actor} selected={actorFilters.has(actor)} onClick={() => toggleSetValue(setActorFilters, actor)} testId={`filter-actor-${actor}`} />
-              ))}
-            </div>
-          </div>
-        ) : null}
       </div>
 
       {inlineError ? <div role="alert" className="rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700">{inlineError}</div> : null}
@@ -515,29 +533,33 @@ export function JobsPage() {
         <span data-testid="jobs-page-count">Page {Math.min(page, totalPages)} of {totalPages}</span>
       </div>
 
-      <DataTable
-        columns={columns}
-        rows={filteredRows}
-        emptyMessage={loading ? "Loading jobs..." : "No jobs found."}
-        getRowId={jobId}
-        getSelectionLabel={(row) => `Select job ${jobId(row)}`}
-        getRowName={(row) => `Job ${jobId(row)} ${jobType(row)} ${lifecycleStatus(row)} ${actorName(row)}`}
-        page={page}
-        pageSize={pageSize}
-        onPageChange={setPage}
-        onPageSizeChange={setPageSize}
-        pageSizeOptions={[10, 25, 50, 100]}
-        selectable
-        selectionColumnPosition="start"
-        columnPickerEnabled
-        totalRows={filteredRows.length}
-        bulkActions={bulkActions}
-        onBulkAction={(action, selectedIds) => {
-          if (action === "cancel" || action === "retry" || action === "delete") requestBulkAction(action, selectedIds);
-        }}
-        tableId="db-mcp-jobs-ps76-v2"
-        ariaLabel="DB MCP jobs"
-      />
+      {loading && firstLoadRef.current ? (
+        <div className="rounded-md border border-border bg-background p-6 text-sm text-muted-foreground">Loading jobs...</div>
+      ) : (
+        <DataTable
+          columns={columns}
+          rows={filteredRows}
+          emptyMessage="No jobs found."
+          getRowId={jobId}
+          getSelectionLabel={(row) => `Select job ${jobId(row)}`}
+          getRowName={(row) => `Job ${jobId(row)} ${jobType(row)} ${lifecycleStatus(row)} ${actorName(row)}`}
+          page={page}
+          pageSize={pageSize}
+          onPageChange={setPage}
+          onPageSizeChange={setPageSize}
+          pageSizeOptions={[10, 25, 50, 100]}
+          selectable
+          selectionColumnPosition="start"
+          columnPickerEnabled
+          totalRows={filteredRows.length}
+          bulkActions={bulkActions}
+          onBulkAction={(action, selectedIds) => {
+            if (action === "cancel" || action === "retry" || action === "delete") requestBulkAction(action, selectedIds);
+          }}
+          tableId="db-mcp-jobs-ps76-v2"
+          ariaLabel="DB MCP jobs"
+        />
+      )}
 
       <Dialog open={detailJob !== null} onOpenChange={(open) => { if (!open) setDetailJob(null); }} label={detailId ? `Job ${detailId}` : "Job detail"}>
         {detailJob ? (
@@ -618,6 +640,12 @@ export function JobsPage() {
                 <CodeViewer title="Raw job record" language="json" code={JSON.stringify(detailJob, null, 2)} />
               </TabsContent>
             </Tabs>
+
+            <div className="flex justify-end">
+              <Button type="button" variant="secondary" onClick={() => setDetailJob(null)}>
+                Cancel
+              </Button>
+            </div>
           </div>
         ) : null}
       </Dialog>

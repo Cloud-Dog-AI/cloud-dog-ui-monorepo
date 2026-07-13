@@ -117,7 +117,10 @@ export function FileArtifactCard(props: FileArtifactCardProps) {
         ) : null}
 
         {statusLabel ? (
-          <span className="rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">
+          // WCAG 2 AA (1.4.3): text-muted-foreground (#64748b) on bg-muted (#f1f5f9) is
+          // only 4.34:1 (< 4.5:1). Use the darker secondary-foreground token so the status
+          // badge meets the AA minimum contrast ratio while staying on the muted chip.
+          <span className="rounded-full bg-muted px-2 py-0.5 text-xs font-medium text-secondary-foreground">
             {statusLabel}
           </span>
         ) : null}

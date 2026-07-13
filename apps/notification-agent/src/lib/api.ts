@@ -17,6 +17,9 @@
 
 import { createApiClient } from '@cloud-dog/api-client';
 
+const DEFAULT_MESSAGE_LIST_LIMIT = 100;
+const DEFAULT_USER_LIST_LIMIT = 100;
+
 export type RuntimeHealth = Readonly<{
   status: string;
   application?: string;
@@ -69,6 +72,8 @@ export type UserRecord = Readonly<{
   language?: string | null;
   preferred_channel?: string | null;
   content_style?: string | null;
+  timezone?: string | null;
+  keywords?: string[] | null;
 }>;
 
 export type GroupRecord = Readonly<{
@@ -76,6 +81,10 @@ export type GroupRecord = Readonly<{
   name: string;
   description?: string | null;
   enabled?: boolean;
+  language?: string | null;
+  preferred_channel?: string | null;
+  content_style?: string | null;
+  keywords?: string[] | null;
 }>;
 
 export type GroupMemberRecord = Readonly<{
@@ -93,6 +102,7 @@ export type ChannelRecord = Readonly<{
   name: string;
   type: string;
   enabled?: boolean;
+  description?: string | null;
   config?: Record<string, unknown> | null;
   created_at?: string | null;
   message_count?: number | null;
@@ -160,6 +170,13 @@ export type RbacRoleRecord = Readonly<{
   permissions: string[];
   channels?: string[];
   functions?: string[];
+}>;
+
+// CX-110: GET /webapi/proxy/admin/policies — permission catalogue + role policies.
+export type PoliciesPayload = Readonly<{
+  permissions: string[];
+  roles: string[];
+  role_policies: Record<string, string[]>;
 }>;
 
 export type PromptRecord = Readonly<{
@@ -262,12 +279,6 @@ export type LogsResponse = Readonly<{
   }>;
 }>;
 
-export type ConsoleCallOptions = Readonly<{
-  requestId?: string;
-  correlationId?: string;
-  adminOverrideKey?: string;
-}>;
-
 export type NotificationAdminApi = Readonly<{
   getHealth: () => Promise<RuntimeHealth>;
   getStatus: () => Promise<RuntimeStatus>;
@@ -275,11 +286,15 @@ export type NotificationAdminApi = Readonly<{
   listLogs: (logType?: string, lines?: number) => Promise<RuntimeLogEntry[]>;
   listStructuredLogs: (params?: { surface?: LogSurfaceId; limit?: number; query?: string }) => Promise<LogsResponse>;
   listMcpTools: () => Promise<McpToolRecord[]>;
-  callMcpTool: (toolName: string, args: unknown, options?: ConsoleCallOptions) => Promise<unknown>;
-  sendA2a: (topic: string, payload: unknown, options?: ConsoleCallOptions) => Promise<unknown>;
+  callMcpTool: (toolName: string, args: unknown) => Promise<unknown>;
+  sendA2a: (topic: string, payload: unknown) => Promise<unknown>;
   listUsers: (query?: string) => Promise<UserRecord[]>;
+  getMyPreferences: () => Promise<UserRecord>;
+  updateMyPreferences: (payload: Record<string, unknown>) => Promise<UserRecord>;
+  deleteMyPreferences: () => Promise<Record<string, unknown>>;
   createUser: (payload: Record<string, unknown>) => Promise<UserRecord>;
   updateUser: (userId: number, payload: Record<string, unknown>) => Promise<UserRecord>;
+  setUserEnabled: (userId: number, enabled: boolean) => Promise<Record<string, unknown>>;
   deleteUser: (userId: number) => Promise<void>;
   listGroups: () => Promise<GroupRecord[]>;
   createGroup: (payload: Record<string, unknown>) => Promise<GroupRecord>;
@@ -315,6 +330,8 @@ export type NotificationAdminApi = Readonly<{
   createAdminApiKey: (payload: Record<string, unknown>) => Promise<Record<string, unknown>>;
   revokeAdminApiKey: (keyId: string) => Promise<Record<string, unknown>>;
   listRbacRoles: () => Promise<RbacRoleRecord[]>;
+  // CX-110: permission catalogue + role policies for the Roles page.
+  getPolicies: () => Promise<PoliciesPayload>;
   createRbacRole: (payload: Record<string, unknown>) => Promise<RbacRoleRecord>;
   updateRbacRole: (roleName: string, payload: Record<string, unknown>) => Promise<RbacRoleRecord>;
   deleteRbacRole: (roleName: string) => Promise<Record<string, unknown>>;
@@ -384,35 +401,24 @@ export function createNotificationAdminApi(baseUrl: string): NotificationAdminAp
       };
     },
     listMcpTools: async () => asArray<McpToolRecord>(await client.get<unknown>('/webapi/proxy/mcp/tools')),
-    callMcpTool: (toolName, args, options) =>
-      client.post<unknown>(
-        '/webapi/proxy/mcp/tools/call',
-        { name: toolName, arguments: args, admin_override_key: options?.adminOverrideKey || undefined },
-        {
-          requestId: options?.requestId,
-          correlationId: options?.correlationId,
-          headers: options?.adminOverrideKey ? { 'X-Admin-Override-Key': options.adminOverrideKey } : undefined,
-        },
-      ),
-    sendA2a: (topic, payload, options) =>
-      client.post<unknown>(
-        '/webapi/proxy/a2a/send',
-        { topic, payload, admin_override_key: options?.adminOverrideKey || undefined },
-        {
-          requestId: options?.requestId,
-          correlationId: options?.correlationId,
-          headers: options?.adminOverrideKey ? { 'X-Admin-Override-Key': options.adminOverrideKey } : undefined,
-        },
-      ),
+    callMcpTool: (toolName, args) =>
+      client.post<unknown>('/webapi/proxy/mcp/tools/call', { name: toolName, arguments: args }),
+    sendA2a: (topic, payload) =>
+      client.post<unknown>('/webapi/proxy/a2a/send', { topic, payload }),
     listUsers: async (query) => {
       return asArray<UserRecord>(
         await client.get<unknown>('/webapi/proxy/users', {
-          query: { limit: 1000, q: query?.trim() || undefined },
+          query: { limit: DEFAULT_USER_LIST_LIMIT, q: query?.trim() || undefined },
         }),
       );
     },
+    getMyPreferences: () => client.get<UserRecord>('/webapi/proxy/users/me/preferences'),
+    updateMyPreferences: (payload) => client.put<UserRecord>('/webapi/proxy/users/me/preferences', payload),
+    deleteMyPreferences: () => client.delete<Record<string, unknown>>('/webapi/proxy/users/me/preferences'),
     createUser: (payload) => client.post<UserRecord>('/webapi/proxy/users', payload),
     updateUser: (userId, payload) => client.patch<UserRecord>(`/webapi/proxy/users/${userId}`, payload),
+    setUserEnabled: (userId, enabled) =>
+      client.patch<Record<string, unknown>>(`/webapi/proxy/users/${userId}/enabled`, { enabled }),
     deleteUser: async (userId) => {
       await client.delete<unknown>(`/webapi/proxy/users/${userId}`);
     },
@@ -442,7 +448,7 @@ export function createNotificationAdminApi(baseUrl: string): NotificationAdminAp
     disableChannel: (channelId) =>
       client.post<Record<string, unknown>>(`/webapi/proxy/channels/${channelId}/disable`, {}),
     listMessages: async () =>
-      asArray<MessageRecord>(await client.get<unknown>('/webapi/proxy/messages', { query: { limit: 1000 } })),
+      asArray<MessageRecord>(await client.get<unknown>('/webapi/proxy/messages', { query: { limit: DEFAULT_MESSAGE_LIST_LIMIT } })),
     getMessage: (messageId) => client.get<MessageDetailRecord>(`/webapi/proxy/messages/${messageId}`, {
       query: { format: 'json' },
     }),
@@ -486,6 +492,14 @@ export function createNotificationAdminApi(baseUrl: string): NotificationAdminAp
     createAdminApiKey: (payload) => client.post<Record<string, unknown>>('/webapi/proxy/admin/api-keys', payload),
     revokeAdminApiKey: (keyId) => client.delete<Record<string, unknown>>(`/webapi/proxy/admin/api-keys/${keyId}`),
     listRbacRoles: async () => asArray<RbacRoleRecord>(await client.get<unknown>('/webapi/proxy/rbac/roles')),
+    getPolicies: async () => {
+      const raw = await client.get<Partial<PoliciesPayload>>('/webapi/proxy/admin/policies');
+      return {
+        permissions: Array.isArray(raw?.permissions) ? raw!.permissions : [],
+        roles: Array.isArray(raw?.roles) ? raw!.roles : [],
+        role_policies: raw?.role_policies && typeof raw.role_policies === 'object' ? raw.role_policies : {},
+      };
+    },
     createRbacRole: (payload) => client.post<RbacRoleRecord>('/webapi/proxy/rbac/roles', payload),
     updateRbacRole: (roleName, payload) =>
       client.put<RbacRoleRecord>(`/webapi/proxy/rbac/roles/${encodeURIComponent(roleName)}`, payload),

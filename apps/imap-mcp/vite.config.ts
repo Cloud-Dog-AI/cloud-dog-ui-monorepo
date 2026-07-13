@@ -16,12 +16,25 @@
 
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
+import { fileURLToPath } from "node:url";
 
 const apiProxyTarget = process.env.IMAP_MCP_API_PROXY_TARGET ?? "http://127.0.0.1:8787";
 const mcpProxyTarget = process.env.IMAP_MCP_MCP_PROXY_TARGET ?? "http://127.0.0.1:8788";
 
 export default defineConfig({
   plugins: [react()],
+  resolve: {
+    dedupe: ["react", "react-dom", "react-router", "react-router-dom"],
+    alias: {
+      "@cloud-dog/api-client": fileURLToPath(new URL("../../packages/api-client/src/index.ts", import.meta.url)),
+      "@cloud-dog/auth": fileURLToPath(new URL("../../packages/auth/src/index.ts", import.meta.url)),
+      "@cloud-dog/config": fileURLToPath(new URL("../../packages/config/src/index.ts", import.meta.url)),
+      "@cloud-dog/idam": fileURLToPath(new URL("../../packages/idam/src/index.tsx", import.meta.url)),
+      "@cloud-dog/shell": fileURLToPath(new URL("../../packages/shell/src/index.ts", import.meta.url)),
+      "@cloud-dog/tokens": fileURLToPath(new URL("../../packages/tokens/src/index.ts", import.meta.url)),
+      "@cloud-dog/ui": fileURLToPath(new URL("../../packages/ui/src/index.ts", import.meta.url)),
+    },
+  },
   server: {
     proxy: {
       "/api": {

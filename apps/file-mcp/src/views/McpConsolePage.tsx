@@ -115,7 +115,7 @@ export function McpConsolePage() {
           <div className="flex flex-wrap items-center gap-3">
             <span>Auth: <strong>{authMode === "cookie" ? "Session cookie" : "API key"}</strong></span>
             <span>Profile: <strong>{selectedProfile}</strong></span>
-            <a className="text-sm font-medium text-sky-700 hover:underline" href="/api-docs#mcp">View API documentation</a>
+            <a className="text-sm font-medium text-sky-700 hover:underline" href="/developer/api-docs#mcp">View API documentation</a>
           </div>
           <p className="text-xs text-muted-foreground break-all"><span className="font-semibold text-foreground">MCP JSON-RPC: </span><code>{`${mcpBaseUrl}/messages`}</code></p>
         </CardContent>
@@ -124,7 +124,7 @@ export function McpConsolePage() {
         <CardHeader><h2 className="text-lg font-semibold">MCP tool execution</h2></CardHeader>
         <CardContent>
           {loading ? <div className="flex items-center gap-2 text-sm text-muted-foreground" role="status" aria-live="polite"><Spinner className="h-5 w-5" />Loading MCP tools...</div> : (
-            <Ps72McpConsole key={consoleKey} endpointUrl={`${mcpBaseUrl}/messages`} tools={tools} health={error ? "unhealthy" : "healthy"} hasBoundKey={authMode === "cookie" || Boolean(apiKey.trim())} boundLabel={boundKeyLabel(authMode, apiKey)} docsHref="/api-docs#mcp" jobsHref="/jobs" onExecute={executeTool} />
+            <Ps72McpConsole key={consoleKey} endpointUrl={`${mcpBaseUrl}/messages`} tools={tools} health={error ? "unhealthy" : "healthy"} hasBoundKey={authMode === "cookie" || Boolean(apiKey.trim())} boundLabel={boundKeyLabel(authMode, apiKey)} docsHref="/developer/api-docs#mcp" jobsHref="/system/jobs" onExecute={executeTool} />
           )}
         </CardContent>
       </Card>

@@ -52,9 +52,11 @@ export function formatBytes(value: number | null | undefined): string {
   return `${(value / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-export function renderRelativeTime(value: string | null | undefined): React.ReactNode {
+export function renderRelativeTime(value: string | null | undefined, className?: string): React.ReactNode {
   if (!value) return 'N/A';
-  return <RelativeTime timestamp={value} />;
+  // className (when given) REPLACES RelativeTime's default muted colour so the
+  // timestamp stays readable on coloured surfaces (e.g. the chat user bubble).
+  return <RelativeTime timestamp={value} className={className} />;
 }
 
 export function PageScaffold(props: {

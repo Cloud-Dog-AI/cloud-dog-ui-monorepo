@@ -29,27 +29,40 @@ export function TopBar(props: {
   breadcrumbs?: BreadcrumbItem[];
   homePath?: string;
   onHomeNavigate?: (path: string) => void;
+  testIdPrefix?: string;
 }) {
   const shell = useShell();
   const title = props.appName ? `${brand.name} : ${props.appName}` : brand.name;
   const homePath = props.homePath ?? "/";
+  const testIdPrefix = props.testIdPrefix ?? "cloud-dog-shell";
 
   return (
-    <div className="h-14 border-b bg-background text-foreground flex items-center gap-3 px-3">
-      <Button
-        variant="ghost"
-        size="icon"
-        aria-label="Open navigation"
-        className="md:hidden"
-        onClick={() => shell.openMobileDrawer()}
-      >
-        <span aria-hidden="true">≡</span>
-      </Button>
+    <div
+      className="h-14 border-b bg-background text-foreground flex items-center gap-3 px-3"
+      data-testid={`${testIdPrefix}-top-bar-content`}
+    >
+      {/* Mobile navigation landmark: the persistent Main navigation <nav> is
+          `hidden md:block`, so on small screens the shell would otherwise expose NO
+          navigation landmark until the drawer opens. Wrapping the mobile trigger in a
+          `md:hidden` <nav> gives mobile viewports exactly one visible navigation
+          landmark (mirroring the desktop one, which is `hidden md:block`). */}
+      <nav aria-label="Mobile navigation" className="md:hidden" data-testid={`${testIdPrefix}-mobile-nav`}>
+        <Button
+          variant="ghost"
+          size="icon"
+          aria-label="Open navigation"
+          onClick={() => shell.openMobileDrawer()}
+          data-testid={`${testIdPrefix}-mobile-nav-trigger`}
+        >
+          <span aria-hidden="true">≡</span>
+        </Button>
+      </nav>
 
       <a
         href={homePath}
         className="flex items-center gap-2 min-w-0 rounded-md focus:outline-none focus:ring-2 focus:ring-ring"
         aria-label="Go to home"
+        data-testid={`${testIdPrefix}-home-link`}
         onClick={(event) => {
           if (!props.onHomeNavigate) return;
           event.preventDefault();
@@ -60,13 +73,13 @@ export function TopBar(props: {
         <div className="font-semibold truncate">{title}</div>
       </a>
 
-      <div className="flex-1 px-2">
+      <div className="flex-1 px-2" data-testid={`${testIdPrefix}-breadcrumbs`}>
         {props.breadcrumbs ? <Breadcrumbs items={props.breadcrumbs} /> : null}
       </div>
 
-      <div className="flex items-center gap-1">
+      <div className="flex items-center gap-1" data-testid={`${testIdPrefix}-top-actions`}>
         <ThemeToggle />
-        <UserBadge config={props.userMenu} />
+        <UserBadge config={props.userMenu} testIdPrefix={testIdPrefix} />
       </div>
     </div>
   );

@@ -18,11 +18,22 @@
 import * as React from 'react';
 import { useAuth } from '@cloud-dog/auth';
 import { useConfig } from '@cloud-dog/config';
-import { createExpertAgentApi, type ExpertAgentApi } from '../lib/api';
+import { createExpertAgentApi, type ExpertAgentApi, type PromptTestCase } from '../lib/api';
 
 type RuntimeConfig = Readonly<{
   API_BASE_URL: string;
   WEB_API_BASE_URL: string;
+}>;
+
+// EA-89 (W28E-1863 fix-wave-c): the generated test cases were rendered inline on
+// /prompts. They now live on a dedicated /prompts/test-cases surface. Generation
+// still happens from the prompt workbench, so the last generated batch is lifted
+// into shared state and read back by the dedicated page (which can also refresh).
+export type PromptTestCaseBatch = Readonly<{
+  cases: PromptTestCase[];
+  prompt: string;
+  expertLabel?: string;
+  generatedAt: string;
 }>;
 
 type AppState = Readonly<{
@@ -30,6 +41,8 @@ type AppState = Readonly<{
   latestFailure: string | null;
   captureFailure: (error: unknown) => string;
   clearFailure: () => void;
+  promptTestCases: PromptTestCaseBatch | null;
+  setPromptTestCases: (batch: PromptTestCaseBatch | null) => void;
 }>;
 
 const AppStateContext = React.createContext<AppState | null>(null);
@@ -44,6 +57,7 @@ export function AppStateProvider(props: { children: React.ReactNode }) {
   const cfg = useConfig<RuntimeConfig>();
   const auth = useAuth();
   const [latestFailure, setLatestFailure] = React.useState<string | null>(null);
+  const [promptTestCases, setPromptTestCases] = React.useState<PromptTestCaseBatch | null>(null);
 
   const clearFailure = React.useCallback(() => {
     setLatestFailure(null);
@@ -64,7 +78,7 @@ export function AppStateProvider(props: { children: React.ReactNode }) {
   );
 
   return (
-    <AppStateContext.Provider value={{ api, latestFailure, captureFailure, clearFailure }}>
+    <AppStateContext.Provider value={{ api, latestFailure, captureFailure, clearFailure, promptTestCases, setPromptTestCases }}>
       {props.children}
     </AppStateContext.Provider>
   );

@@ -164,7 +164,7 @@ export function GroupsPage() {
   }, [api, captureFailure, clearFailure, refresh, selectGroup, selectedGroupId]);
 
   const bulkDelete = React.useCallback(async (selected: GroupRecord[]) => {
-    if (!selected.length || !window.confirm(`Delete ${selected.length} selected groups?`)) return;
+    if (!selected.length) return;
     clearFailure();
     try {
       await Promise.all(selected.map(async (group) => api.deleteGroup(group.id)));

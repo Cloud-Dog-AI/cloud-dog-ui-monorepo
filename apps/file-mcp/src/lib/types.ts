@@ -171,11 +171,14 @@ export type AdminApiKey = Readonly<{
 export type AdminProfile = Readonly<{
   name: string;
   display_name?: string;
+  description?: string;
   backend: string;
   roots: string[];
   api_keys_count: number;
   status?: string;
+  status_missing?: string[];
   reason?: string;
+  endpoint_health?: Record<string, unknown>;
   profile: Record<string, unknown>;
 }>;
 

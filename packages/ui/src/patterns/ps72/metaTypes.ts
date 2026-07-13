@@ -21,6 +21,7 @@
 
 /** PS-72 v2 §7 canonical lifecycle status states. Projects MUST NOT invent new states. */
 export type Ps72LifecycleState =
+  | "not-started"
   | "queued"
   | "dispatched"
   | "running"
@@ -71,6 +72,8 @@ export type Ps72ExecuteResult = Readonly<{
   denied: boolean;
   /** Async tools (PS-75): non-empty when the response carried a Job ID. */
   jobId?: string | null;
+  /** True when the WebUI supplied correlation/request IDs because the backend omitted them. */
+  clientGenerated?: boolean;
 }>;
 
 /** Relative duration formatter per PS-72 v2 §5.3 (e.g. "243 ms", "1.2 s"). */
@@ -85,6 +88,8 @@ export function lifecycleTone(state: Ps72LifecycleState): "ok" | "warning" | "er
   switch (state) {
     case "succeeded":
       return "ok";
+    case "not-started":
+      return "neutral";
     case "failed":
     case "timed-out":
     case "dead-lettered":

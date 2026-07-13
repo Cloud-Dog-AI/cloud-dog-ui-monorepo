@@ -141,72 +141,73 @@ export function MessageList(props: MessageListProps) {
             const active = props.selectedId === message.id;
             const bulkSelected = selectedIds.has(message.id);
 
+            // PS-WEBUI-STYLE-COMPONENTS WSC a11y (W28E-1803C): the row container
+            // is NOT itself an interactive control. The bulk-select Checkbox sits
+            // as a SIBLING of the message-select <button> (not nested inside it),
+            // so there is no nested-interactive violation. The button is the
+            // single click/keyboard select target (native Enter/Space).
             return (
-              <article
+              <div
                 key={message.id}
-                role="button"
-                tabIndex={0}
-                aria-pressed={active}
                 className={cn(
-                  "flex gap-3 px-4 py-3 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                  "flex gap-3 px-4 py-3 transition-colors",
                   active ? "bg-primary/5" : "hover:bg-muted/40",
                 )}
-                onClick={() => props.onSelect(message.id)}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter" || event.key === " ") {
-                    event.preventDefault();
-                    props.onSelect(message.id);
-                  }
-                }}
               >
                 {props.onBulkAction ? (
                   <div className="pt-1">
                     <Checkbox
                       checked={bulkSelected}
                       aria-label={`Select message ${message.subject}`}
-                      onClick={(event) => event.stopPropagation()}
                       onChange={(event) => toggleSelection(message.id, event.currentTarget.checked)}
                     />
                   </div>
                 ) : null}
 
-                <div
-                  className={cn(
-                    "mt-1 h-2.5 w-2.5 flex-none rounded-full",
-                    message.unread ? "bg-primary" : "bg-transparent",
-                  )}
-                  aria-hidden="true"
-                />
+                <button
+                  type="button"
+                  aria-pressed={active}
+                  className="flex min-w-0 flex-1 gap-3 rounded-sm text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  onClick={() => props.onSelect(message.id)}
+                >
+                  <span
+                    className={cn(
+                      "mt-1 h-2.5 w-2.5 flex-none rounded-full",
+                      message.unread ? "bg-primary" : "bg-transparent",
+                    )}
+                    aria-hidden="true"
+                  />
 
-                <div className="min-w-0 flex-1 space-y-1">
-                  <div className="flex flex-wrap items-start justify-between gap-2">
-                    <div className="min-w-0">
-                      <p
-                        className={cn(
-                          "truncate text-sm",
-                          message.unread ? "font-semibold text-foreground" : "font-medium text-foreground",
-                        )}
-                      >
-                        {message.sender}
-                      </p>
-                      <p className="truncate text-sm text-foreground">{message.subject}</p>
-                    </div>
-                    <RelativeTime timestamp={message.timestamp} className="text-xs text-muted-foreground" />
-                  </div>
+                  <span className="min-w-0 flex-1 space-y-1">
+                    <span className="flex flex-wrap items-start justify-between gap-2">
+                      <span className="min-w-0">
+                        <span
+                          className={cn(
+                            "block truncate text-sm",
+                            message.unread ? "font-semibold text-foreground" : "font-medium text-foreground",
+                          )}
+                        >
+                          {message.sender}
+                        </span>
+                        <span className="block truncate text-sm text-foreground">{message.subject}</span>
+                      </span>
+                      <RelativeTime timestamp={message.timestamp} className="text-xs text-foreground/70" />
+                    </span>
 
-                  <p className="line-clamp-2 text-sm text-muted-foreground">{message.preview}</p>
+                    <span className="line-clamp-2 block text-sm text-foreground/70">{message.preview}</span>
 
-                  <div className="flex flex-wrap items-center gap-2">
-                    <Badge variant={badgeVariantForStatus(message.status)}>{message.status}</Badge>
-                    {message.attachmentCount ? (
-                      <Badge variant="secondary">
-                        {message.attachmentCount} attachment{message.attachmentCount === 1 ? "" : "s"}
-                      </Badge>
-                    ) : null}
-                    {message.unread ? <span className="text-xs font-medium text-primary">Unread</span> : null}
-                  </div>
-                </div>
-              </article>
+                    <span className="flex flex-wrap items-center gap-2">
+                      <Badge variant={badgeVariantForStatus(message.status)}>{message.status}</Badge>
+                      {message.attachmentCount ? (
+                        <Badge variant="secondary">
+                          {message.attachmentCount} attachment{message.attachmentCount === 1 ? "" : "s"}
+                        </Badge>
+                      ) : null}
+                      {message.unread ? <span className="text-xs font-medium text-primary">Unread</span> : null}
+                    </span>
+                  </span>
+                </button>
+              </div>
             );
           })
         )}

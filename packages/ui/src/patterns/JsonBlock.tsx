@@ -72,7 +72,8 @@ export function JsonBlock(props: JsonBlockProps) {
   };
 
   return (
-    <section className={cn("rounded-md border bg-background", props.className)}>
+    // PS-77 CW-F5 — display-only structured data (formatted JSON, never raw).
+    <section className={cn("rounded-md border bg-background", props.className)} data-testid="CW-F5">
       <div className="flex items-center gap-2 px-3 py-2 border-b">
         <button
           type="button"
@@ -97,7 +98,12 @@ export function JsonBlock(props: JsonBlockProps) {
       </div>
 
       {!collapsed ? (
-        <pre className={cn("p-3 text-xs overflow-auto font-mono", "bg-muted/20")}>
+        <pre
+          tabIndex={0}
+          role="region"
+          aria-label={props.title ?? "JSON content"}
+          className={cn("p-3 text-xs overflow-auto font-mono", "bg-muted/20")}
+        >
           {text}
         </pre>
       ) : null}

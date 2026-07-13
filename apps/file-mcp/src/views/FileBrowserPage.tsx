@@ -24,12 +24,14 @@ import {
   CardContent,
   CardHeader,
   DataTable,
+  DocumentViewer,
   EntityDialog,
   FileBrowser,
   FileDropZone,
   FolderTree,
   Input,
   RelativeTime,
+  SearchPanel,
   Select,
   Spinner,
   Textarea,
@@ -849,6 +851,9 @@ export function FileBrowserPage() {
                 void uploadFiles(files);
               }}
               accept=".txt,.md,.json,.yaml,.yml,.xml,.html,.csv,.log,.py,.ts,.tsx,.js,.jsx"
+              label="Upload file"
+              description={`Files are uploaded to ${pathDraft}.`}
+              testId="file-mcp-file-drop-zone"
             />
           ) : null}
 
@@ -901,9 +906,17 @@ export function FileBrowserPage() {
                 files={browserFiles}
                 currentPath={pathDraft}
                 showBreadcrumb={false}
+                loading={isLoading}
+                errorMessage={error}
+                statusMessage={status}
+                readOnly={!canWriteCurrentProfile}
+                selectedPath={activeFilePath}
                 onNavigate={(path) => {
                   setPathDraft(path);
                   void browse(path);
+                }}
+                onOpen={(path) => {
+                  void openPath(path);
                 }}
                 onDelete={canWriteCurrentProfile ? requestDeletePath : undefined}
                 onDownload={(path) => {
@@ -912,6 +925,7 @@ export function FileBrowserPage() {
                 onCreateFolder={canWriteCurrentProfile ? () => {
                   void createDirectory();
                 } : undefined}
+                onRefresh={() => void browse(pathDraft)}
               />
             </div>
           </div>
@@ -947,11 +961,24 @@ export function FileBrowserPage() {
         </CardContent>
       </Card>
 
-      <Card>
-        <CardHeader className="space-y-3">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <h2 className="text-lg font-semibold">Entries</h2>
-            <div className="flex flex-wrap items-center gap-2">
+      <SearchPanel
+        title="Catalogue"
+        description="Browse and search files and folders for the selected storage profile."
+        filters={[]}
+        query={entryQuery}
+        onQueryChange={setEntryQuery}
+        onSearch={(nextQuery) => setEntryQuery(nextQuery)}
+        onClear={() => setEntryQuery("")}
+        queryLabel="Search"
+        queryAriaLabel="Search entries"
+        placeholder="Search entries"
+        loading={isLoading && entryRows.length === 0 && !entryQuery.trim()}
+        loadingLabel="Loading entries"
+        status={`${filteredEntryRows.length} catalogue entries visible`}
+        resultsLabel="Catalogue entries"
+        emptyMessage="No catalogue entries found."
+        headerActions={
+          <>
               <div className="flex rounded-md border p-1" aria-label="Entry view mode">
                 <Button
                   type="button"
@@ -975,23 +1002,10 @@ export function FileBrowserPage() {
                 </Button>
               </div>
               <Button variant="secondary" onClick={() => void browse(pathDraft)}>Refresh</Button>
-            </div>
-          </div>
-          <Input
-            className="max-w-md"
-            value={entryQuery}
-            onChange={(event) => setEntryQuery(event.target.value)}
-            placeholder="Search entries"
-            aria-label="Search entries"
-          />
-        </CardHeader>
-        <CardContent className="overflow-x-auto">
-          {isLoading && entryRows.length === 0 && !entryQuery.trim() ? (
-            <div className="flex items-center gap-2 text-sm text-muted-foreground" role="status" aria-live="polite">
-              <Spinner className="h-4 w-4" />
-              Loading entries...
-            </div>
-          ) : viewMode === "grid" ? (
+          </>
+        }
+        results={
+          viewMode === "grid" ? (
             <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
               {filteredEntryRows.length ? (
                 filteredEntryRows.map((row) => (
@@ -1038,9 +1052,9 @@ export function FileBrowserPage() {
               onBulkAction={onEntryBulkAction}
               columnPickerEnabled={true}
             />
-          )}
-        </CardContent>
-      </Card>
+          )
+        }
+      />
 
       {canWriteCurrentProfile ? (
         <Card>
@@ -1104,6 +1118,12 @@ export function FileBrowserPage() {
               readOnly={!canWriteCurrentProfile}
             />
           </div>
+
+          <DocumentViewer
+            title="File preview"
+            content={fileText || "No file selected."}
+            downloadFilename={activeFilePath ? activeFilePath.split("/").pop() || "selected-file.txt" : undefined}
+          />
 
           <div className="flex flex-wrap gap-2">
             {canWriteCurrentProfile ? (

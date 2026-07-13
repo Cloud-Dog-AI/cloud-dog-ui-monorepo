@@ -16,5 +16,7 @@
 
 export { Popover } from "./Popover";
 export { Tooltip } from "./Tooltip";
+export { HelpTip } from "./HelpTip";
+export type { HelpTipProps } from "./HelpTip";
 export { DropdownMenu } from "./DropdownMenu";
 export type { DropdownItem } from "./DropdownMenu";

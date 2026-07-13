@@ -18,14 +18,20 @@ import * as React from "react";
 import { Avatar, Button, DropdownMenu } from "@cloud-dog/ui";
 import type { UserMenuConfig } from "../types/nav.js";
 
-export function UserMenu(props: { config?: UserMenuConfig }) {
+export function UserMenu(props: { config?: UserMenuConfig; testIdPrefix?: string }) {
   const cfg = props.config;
   if (!cfg) return null;
+  const testIdPrefix = props.testIdPrefix ?? "cloud-dog-shell";
 
   return (
     <DropdownMenu
       trigger={
-        <Button variant="ghost" size="icon" aria-label="User menu">
+        <Button
+          variant="ghost"
+          size="icon"
+          aria-label="Account menu"
+          data-testid={`${testIdPrefix}-user-menu-trigger`}
+        >
           <Avatar
             alt={cfg.displayName ?? "User"}
             src={cfg.avatarUrl}

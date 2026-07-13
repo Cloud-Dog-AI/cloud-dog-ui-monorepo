@@ -112,6 +112,27 @@ export function buildFolderTree(entries: RepoDirEntry[]): FolderNode[] {
 export function parseGitLogOutput(log: string): CommitRecord[] {
   const trimmed = String(log ?? "").trim();
   if (!trimmed) return [];
+  // git_log emits one TAB-delimited line per commit: <hash>\t<author>\t<isoDate>\t<subject>
+  // (W28J-1330). Verbose `commit <hash>` blocks are still parsed below as a fallback.
+  if (trimmed.includes("\t") && !/^commit [0-9a-f]/m.test(trimmed)) {
+    return trimmed
+      .split("\n")
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .map((line) => {
+        const [hash = "", author = "", date = "", ...rest] = line.split("\t");
+        const message = rest.join("\t").trim();
+        return {
+          hash,
+          author,
+          date,
+          message: message || hash,
+          body: message,
+          merge: /^Merge\b/i.test(message),
+          raw: line,
+        };
+      });
+  }
   const blocks = trimmed.split(/^commit /m).filter(Boolean);
   return blocks.map((block) => {
     const lines = block.split("\n");

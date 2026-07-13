@@ -1,0 +1,6 @@
+schema-version: 1.0
+project: git-mcp
+canon-set: UI-MONOREPO-APP
+canon-template-baseline: 1.0
+conditional-docs: []
+additional-docs: []

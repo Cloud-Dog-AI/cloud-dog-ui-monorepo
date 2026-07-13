@@ -99,7 +99,7 @@ export type ImapMcpApi = Readonly<{
   listMcpTools: () => Promise<CallResult<ToolDescriptor[]>>;
   listA2ATools: () => Promise<CallResult<ToolDescriptor[]>>;
   callTool: <T>(toolName: string, payload: JsonRecord) => Promise<CallResult<T>>;
-  callMcpTool: <T>(toolName: string, payload: JsonRecord) => Promise<CallResult<T>>;
+  callMcpTool: <T>(toolName: string, payload: JsonRecord, apiKeyOverride?: string) => Promise<CallResult<T>>;
   listProfiles: () => Promise<CallResult<string[]>>;
   getProfile: (profileId: string) => Promise<CallResult<JsonRecord>>;
   upsertProfile: (profileId: string, payload: JsonRecord) => Promise<CallResult<JsonRecord>>;
@@ -133,8 +133,9 @@ export type ImapMcpApi = Readonly<{
   cancelJob: (jobId: string) => Promise<CallResult<JsonRecord>>;
   retryJob: (jobId: string) => Promise<CallResult<JsonRecord>>;
   deleteJob: (jobId: string) => Promise<CallResult<JsonRecord>>;
+  archiveJob: (jobId: string) => Promise<CallResult<JsonRecord>>;
   exportArchive: (payload: JsonRecord) => Promise<CallResult<JsonRecord>>;
-  callA2ATool: <T>(toolName: string, payload: JsonRecord) => Promise<CallResult<T>>;
+  callA2ATool: <T>(toolName: string, payload: JsonRecord, apiKeyOverride?: string) => Promise<CallResult<T>>;
   parseProfileRow: (profileId: string, profile: JsonRecord) => ProfileRow;
 }>;
 
@@ -309,7 +310,12 @@ function toApiErrorResult<T>(error: unknown, fallbackErrorCode: string, fallback
     return failure(
       fallbackErrorCode,
       asErrorMessage(error.message, fallbackErrorMessage),
-      emptyMeta(error.options.status),
+      {
+        status: error.options.status,
+        requestId: String(error.options.requestId ?? "").trim(),
+        correlationId: String(error.options.correlationId ?? error.options.requestId ?? "").trim(),
+        timestamp: nowIso(),
+      },
       error.options.details
     );
   }
@@ -609,17 +615,23 @@ export function createImapMcpApi(opts: {
   });
   const { apiPath, mcpPath, a2aPath } = apiSurfacePaths(opts.authMode);
 
-  const apiHeaders = (): Record<string, string> | undefined => {
-    const key = opts.getApiKey().trim();
+  const apiHeaders = (apiKeyOverride = ""): Record<string, string> | undefined => {
+    const overrideKey = apiKeyOverride.trim();
+    const key = overrideKey || opts.getApiKey().trim();
+    if (!key) return undefined;
+    if (overrideKey) {
+      return {
+        "x-api-key": key,
+        Authorization: `Bearer ${key}`,
+      };
+    }
     const role = opts.getRole().trim() || "admin";
-    return key
-      ? {
-          "x-api-key": key,
-          "x-role": role,
-          "x-user-roles": role,
-          Authorization: `Bearer ${key}`,
-        }
-      : undefined;
+    return {
+      "x-api-key": key,
+      "x-role": role,
+      "x-user-roles": role,
+      Authorization: `Bearer ${key}`,
+    };
   };
 
   const authGuard = <T>(result: CallResult<T>): CallResult<T> => {
@@ -690,7 +702,13 @@ export function createImapMcpApi(opts: {
             const row = asRecord(item);
             const name = String(row.name ?? "").trim();
             if (!name) return null;
-            return { name, description: String(row.description ?? "") } satisfies ToolDescriptor;
+            const schema = row.inputSchema ?? row.input_schema;
+            const descriptor: ToolDescriptor = {
+              name,
+              description: String(row.description ?? ""),
+              ...(schema && typeof schema === "object" ? { input_schema: schema as Record<string, unknown> } : {}),
+            };
+            return descriptor;
           }).filter((item): item is ToolDescriptor => item !== null);
           return success(items, parsed.meta, raw);
         } catch (error) {
@@ -718,7 +736,13 @@ export function createImapMcpApi(opts: {
             const row = asRecord(item);
             const name = String(row.name ?? "").trim();
             if (!name) return null;
-            return { name, description: String(row.description ?? "") } satisfies ToolDescriptor;
+            const schema = row.inputSchema ?? row.input_schema;
+            const descriptor: ToolDescriptor = {
+              name,
+              description: String(row.description ?? ""),
+              ...(schema && typeof schema === "object" ? { input_schema: schema as Record<string, unknown> } : {}),
+            };
+            return descriptor;
           }).filter((item): item is ToolDescriptor => item !== null);
           return success(items, parsed.meta, raw);
         } catch (error) {
@@ -728,10 +752,10 @@ export function createImapMcpApi(opts: {
 
     callTool,
 
-    callMcpTool: <T>(toolName: string, payload: JsonRecord) =>
+    callMcpTool: <T>(toolName: string, payload: JsonRecord, apiKeyOverride = "") =>
       runMcp(`mcp:tool:${toolName}`, async () => {
         try {
-          const raw = await mcpClient.post<unknown>(`${mcpPath}/${toolName}`, payload, { headers: apiHeaders() });
+          const raw = await mcpClient.post<unknown>(`${mcpPath}/${toolName}`, payload, { headers: apiHeaders(apiKeyOverride) });
           return parseMcpToolResponse<T>(raw, toolName);
         } catch (error) {
           return toApiErrorResult<T>(error, "mcp_tool_http_failed", `MCP tool ${toolName} request failed.`);
@@ -1111,6 +1135,16 @@ export function createImapMcpApi(opts: {
         }
       }),
 
+    archiveJob: (jobId: string) =>
+      runApi("jobs:archive", async () => {
+        try {
+          const raw = await apiClient.post<unknown>(`${apiPath}/admin/jobs/${encodeURIComponent(jobId)}/archive`, {}, { headers: apiHeaders() });
+          return parseApiEnvelope<JsonRecord>(raw, "job_archive_failed", "Failed to archive job.");
+        } catch (error) {
+          return toApiErrorResult<JsonRecord>(error, "job_archive_http_failed", "Archive job request failed.");
+        }
+      }),
+
     exportArchive: (payload: JsonRecord) =>
       runApi("archive:export", async () => {
         try {
@@ -1121,10 +1155,10 @@ export function createImapMcpApi(opts: {
         }
       }),
 
-    callA2ATool: <T>(toolName: string, payload: JsonRecord) =>
+    callA2ATool: <T>(toolName: string, payload: JsonRecord, apiKeyOverride = "") =>
       runA2A(`a2a:tool:${toolName}`, async () => {
         try {
-          const raw = await a2aClient.post<unknown>(`${a2aPath}/${encodeURIComponent(toolName)}`, payload, { headers: apiHeaders() });
+          const raw = await a2aClient.post<unknown>(`${a2aPath}/${encodeURIComponent(toolName)}`, payload, { headers: apiHeaders(apiKeyOverride) });
           return parseApiEnvelope<T>(raw, "a2a_tool_failed", `A2A tool ${toolName} failed.`);
         } catch (error) {
           return toApiErrorResult<T>(error, "a2a_tool_http_failed", `A2A tool ${toolName} request failed.`);

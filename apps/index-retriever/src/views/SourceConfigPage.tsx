@@ -28,14 +28,15 @@ import {
   Input,
   JsonExplorer,
   Label,
+  MetadataEditor,
   RelativeTime,
   RelatedItemsPanel,
   Select,
-  Textarea,
   type DataColumn,
   type EntityFieldDef,
   type EntityFormMode,
 } from "@cloud-dog/ui";
+import { SOURCE_METADATA_SCHEMA } from "../data/metadataSchema";
 import { useIndexRetrieverState } from "../state/AppState";
 import type { JsonRecord, SourceConfig, SourceConfigRecord } from "../lib/types";
 
@@ -148,7 +149,9 @@ export function SourceConfigPage() {
   const app = useIndexRetrieverState();
   const { api, captureFailure, recordActivity } = app;
   const canManageSourceConfigs = app.roles.includes("admin");
-  const canTriggerSync = app.roles.some((role) => ["writer", "maintainer", "admin"].includes(role));
+  const canTriggerSync = app.permissions.includes("*")
+    || app.permissions.includes("source.configure")
+    || app.roles.some((role) => ["writer", "maintainer", "admin"].includes(role));
 
   const [savedConfigs, setSavedConfigs] = React.useState<SourceConfigRecord[]>([]);
   const [selected, setSelected] = React.useState<SourceConfigRecord | null>(null);
@@ -655,26 +658,18 @@ export function SourceConfigPage() {
               </CardHeader>
               <CardContent className="space-y-3">
                 <JsonExplorer data={connectorGuide} defaultExpanded />
-                {dialogMode === "view" ? (
-                  <CodeEditor
-                    value={draft.metadata_json}
-                    language="json"
-                    ariaLabel="Metadata JSON"
-                    readOnly
-                    height={220}
-                  />
-                ) : (
-                  <Textarea
-                    id="ef-metadata_json"
-                    name="metadata_json"
-                    aria-label="Metadata JSON"
-                    rows={10}
-                    value={draft.metadata_json}
-                    onChange={(event) =>
-                      setDraft((current) => ({ ...current, metadata_json: event.target.value }) as SourceDraft)
-                    }
-                  />
-                )}
+                {/* W28E-1878 IR-39: schema-aware metadata editor (shared @cloud-dog/ui
+                    primitive) replaces the bespoke free-text JSON textarea. */}
+                <MetadataEditor
+                  value={draft.metadata_json}
+                  schema={SOURCE_METADATA_SCHEMA}
+                  readOnly={dialogMode === "view"}
+                  ariaLabel="Metadata JSON"
+                  idPrefix="ef"
+                  onChange={(_next, json) =>
+                    setDraft((current) => ({ ...current, metadata_json: json }) as SourceDraft)
+                  }
+                />
                 {errors.metadata_json ? <p className="text-sm text-destructive">{errors.metadata_json}</p> : null}
               </CardContent>
             </Card>

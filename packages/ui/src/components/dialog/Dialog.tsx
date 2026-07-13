@@ -16,6 +16,7 @@
 
 import * as React from "react";
 import { createPortal } from "react-dom";
+import { X } from "lucide-react";
 import { cn } from "../../utils/cn";
 import { useFocusTrap } from "../../hooks/useFocusTrap";
 
@@ -57,6 +58,14 @@ export function Dialog(props: DialogProps) {
         className={cn("relative w-full max-w-lg max-h-[90vh] overflow-y-auto rounded-xl border bg-background p-6 shadow-xl")}
         onClick={(e) => e.stopPropagation()}
       >
+        <button
+          type="button"
+          aria-label="Close dialog"
+          className="absolute right-3 top-3 inline-flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          onClick={() => props.onOpenChange(false)}
+        >
+          <X aria-hidden="true" className="h-4 w-4" />
+        </button>
         {props.children}
       </div>
     </div>,

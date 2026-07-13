@@ -16,6 +16,7 @@
 // Standard: PS-76 v2 (Job Control WebUI Standard)
 
 import * as React from "react";
+import { useLocation, useNavigate } from "react-router-dom";
 import {
   Badge,
   Button,
@@ -30,6 +31,7 @@ import {
   TabsContent,
   TabsList,
   TabsTrigger,
+  useAuditLink,
   type BulkAction,
   type DataColumn,
 } from "@cloud-dog/ui";
@@ -93,9 +95,24 @@ function sentenceCase(s: string): string {
 
 export function JobsPageView() {
   const app = useGitMcpState();
+  const navigate = useNavigate();
+  const location = useLocation();
+  const { linkToJob, linkToCorrelation } = useAuditLink();
+  // Deep-link filter: `/jobs?job_id=<id>` (or `?q=<text>`) pre-filters the table
+  // to that job so an external link (e.g. an async-submit follow-up) lands on the
+  // exact row regardless of how many jobs exist / pagination.
+  const initialQuery = React.useMemo(() => {
+    const params = new URLSearchParams(location.search);
+    return (params.get("job_id") ?? params.get("q") ?? "").trim();
+  }, [location.search]);
+  // J-07: deep-link a job to the shared Audit page (by correlation, else job id).
+  const auditHref = React.useCallback(
+    (job: JobRecord) => (job.correlation_id ? linkToCorrelation(job.correlation_id) : linkToJob(job.job_id)),
+    [linkToCorrelation, linkToJob],
+  );
   const [jobs, setJobs] = React.useState<JobRecord[]>([]);
   const [error, setError] = React.useState<string | null>(null);
-  const [query, setQuery] = React.useState("");
+  const [query, setQuery] = React.useState(initialQuery);
   const [statusFilter, setStatusFilter] = React.useState("");
   const [page, setPage] = React.useState(1);
   const [pageSize, setPageSize] = React.useState(25);
@@ -122,6 +139,12 @@ export function JobsPageView() {
     const timer = window.setInterval(() => void load(), 20_000);
     return () => window.clearInterval(timer);
   }, [load]);
+
+  // Re-apply the deep-link filter when the URL query param changes (e.g. a
+  // client-side nav to /jobs?job_id=<other-id> after the page is already mounted).
+  React.useEffect(() => {
+    if (initialQuery) setQuery(initialQuery);
+  }, [initialQuery]);
 
   // -----------------------------------------------------------------------
   // PS-76 v2 JW8 — Summary metrics
@@ -290,12 +313,12 @@ export function JobsPageView() {
           <span className="cursor-pointer text-sky-600 hover:underline text-xs" onClick={() => { setDetailJob(row); setDetailTab("result"); }}>View</span>
         ) : "\u2014",
       },
-      // 11. Log link
+      // 11. Log link (J-07: deep-link to the shared Audit page for this job's log+audit trail)
       {
         id: "log_link",
         header: "Log",
-        cell: (row) => row.correlation_id ? (
-          <span className="cursor-pointer text-sky-600 hover:underline text-xs" onClick={() => { setDetailJob(row); setDetailTab("lifecycle"); }}>View</span>
+        cell: (row) => row.correlation_id || row.job_id ? (
+          <span className="cursor-pointer text-sky-600 hover:underline text-xs" onClick={() => navigate(auditHref(row))} title="Actions \u203a View Audit">View audit</span>
         ) : "\u2014",
       },
       // 12. Retry count
@@ -340,7 +363,7 @@ export function JobsPageView() {
         },
       },
     ],
-    [],
+    [navigate, auditHref],
   );
 
   return (
@@ -372,6 +395,7 @@ export function JobsPageView() {
             <h3 className="text-base font-semibold">Job {detailJob.job_id.slice(0, 12)}</h3>
             <div className="flex gap-2">
               <Button variant="ghost" size="sm" onClick={() => { void navigator.clipboard.writeText(detailJob.job_id); }}>Copy Job ID</Button>
+              <Button variant="ghost" size="sm" onClick={() => navigate(auditHref(detailJob))} title="Actions › View Audit">View Audit</Button>
               {STATUS_CANCELLABLE.has(detailJob.status.toLowerCase()) && (
                 <Button variant="ghost" size="sm" onClick={() => setConfirmAction({ action: "cancel", jobIds: [detailJob.job_id], label: "Cancel this job?" })}>Cancel</Button>
               )}

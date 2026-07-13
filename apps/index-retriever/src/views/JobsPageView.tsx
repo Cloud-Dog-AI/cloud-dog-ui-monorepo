@@ -257,11 +257,18 @@ export function JobsPageView() {
   const [detailTab, setDetailTab] = React.useState<DetailTab>("Overview");
   const [confirmAction, setConfirmAction] = React.useState<ConfirmAction | null>(null);
   const deepLinkJobIdRef = React.useRef<string | null>(null);
+  const inFlightRefreshRef = React.useRef<Promise<void> | null>(null);
 
-  const refresh = React.useCallback(async () => {
+  const runRefresh = React.useCallback(async () => {
     setError(null);
     try {
-      const out = asRecord(await app.api.callTool("job_list", { limit: 2000 }));
+      // Request the lean list: the table renders only top-level summary columns
+      // (the heavy per-job `payload` is re-fetched via job_get when a row's detail
+      // dialog opens), which keeps the response an order of magnitude smaller than
+      // the full-payload list so parse/render stays responsive.
+      const out = asRecord(
+        await app.api.callTool("job_list", { limit: 2000, include_payload: false }),
+      );
       const items = Array.isArray(out.jobs) ? out.jobs.map(asRecord) : [];
       setRows(items);
       app.recordActivity("jobs.refresh", "ok", String(items.length));
@@ -270,6 +277,23 @@ export function JobsPageView() {
       setError(message);
     }
   }, [app]);
+
+  // Collapse overlapping refreshes into a single in-flight list fetch. Rapid
+  // navigation plus the manual Refresh control can otherwise fire many concurrent
+  // job_list requests; because the server serialises the (still sizeable) list
+  // per request, that concurrency multiplies each response's latency and can leave
+  // the table stuck empty. De-duping to one in-flight request keeps it responsive.
+  const refresh = React.useCallback(async () => {
+    if (inFlightRefreshRef.current) {
+      await inFlightRefreshRef.current;
+      return;
+    }
+    const promise = runRefresh().finally(() => {
+      inFlightRefreshRef.current = null;
+    });
+    inFlightRefreshRef.current = promise;
+    await promise;
+  }, [runRefresh]);
 
   React.useEffect(() => { void refresh(); }, [refresh]);
 

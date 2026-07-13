@@ -16,9 +16,11 @@
 // Covers: UI-R1, UI-R2
 
 import * as React from 'react';
+import { Link } from 'react-router-dom';
 import { useAuth } from '@cloud-dog/auth';
-import { Badge, Button, Card, CardContent, CardHeader, DataTable, EntityDialog, Input, JsonBlock, Label, RelatedItemsPanel, RelativeTime, Select, StructuredView, Textarea } from '@cloud-dog/ui';
+import { Badge, Button, Card, CardContent, CardHeader, DataTable, EntityDialog, Input, JsonExplorer, Label, RelatedItemsPanel, RelativeTime, Select, Textarea, createDataTableActionColumn } from '@cloud-dog/ui';
 import type { BulkAction, DataColumn, EntityFieldDef, RelatedItem } from '@cloud-dog/ui';
+import { Eye, ExternalLink, FileText, Trash2, XCircle } from 'lucide-react';
 import { useNotificationAgentState } from '../state/AppState';
 import type { ChannelRecord, DeliveryRecord, MessageDetailRecord, MessageRecord, PromptRecord } from '../lib/api';
 
@@ -84,6 +86,8 @@ export function MessagesPage() {
   const [query, setQuery] = React.useState('');
   const [channelFilter, setChannelFilter] = React.useState(() => new URLSearchParams(window.location.search).get('channel') ?? '');
   const [senderFilter, setSenderFilter] = React.useState(() => new URLSearchParams(window.location.search).get('sender') ?? '');
+  // NA-P-07: prompt deep-link from PromptsPage row action.
+  const [promptFilter, setPromptFilter] = React.useState(() => new URLSearchParams(window.location.search).get('prompt') ?? '');
   const [dialogOpen, setDialogOpen] = React.useState(false);
   const [composeValues, setComposeValues] = React.useState<ComposeValues>(emptyComposeValues);
   const [composeBody, setComposeBody] = React.useState('Notification UI message created via the real backend.');
@@ -120,7 +124,7 @@ export function MessagesPage() {
 
   React.useEffect(() => {
     setPage(1);
-  }, [query, channelFilter, senderFilter]);
+  }, [query, channelFilter, senderFilter, promptFilter]);
 
   React.useEffect(() => {
     setDeliveryPage(1);
@@ -149,7 +153,15 @@ export function MessagesPage() {
     const matchesQuery = !query.trim() || `${message.id} ${message.subject ?? ''} ${message.created_by ?? ''} ${message.status ?? ''} ${message.message_guid ?? ''} ${message.channel_name ?? ''}`.toLowerCase().includes(query.trim().toLowerCase());
     const matchesChannel = !channelFilter || String(message.channel_name ?? '').toLowerCase() === channelFilter.toLowerCase();
     const matchesSender = !senderFilter.trim() || String(message.created_by ?? '').toLowerCase().includes(senderFilter.trim().toLowerCase());
-    return matchesQuery && matchesChannel && matchesSender;
+    // NA-P-07: prompt filter matches either prompt_id (numeric) or prompt name in template/subject.
+    const matchesPrompt = !promptFilter.trim() || (() => {
+      const needle = promptFilter.trim().toLowerCase();
+      const promptIdRaw = (message as unknown as { prompt_id?: number | string }).prompt_id;
+      const promptId = promptIdRaw == null ? '' : String(promptIdRaw).toLowerCase();
+      const subject = String(message.subject ?? '').toLowerCase();
+      return promptId === needle || subject.includes(needle);
+    })();
+    return matchesQuery && matchesChannel && matchesSender && matchesPrompt;
   });
 
   const openCompose = () => {
@@ -252,10 +264,16 @@ export function MessagesPage() {
       header: 'ID',
       sortable: true,
       sortValue: (message) => message.id,
+      // CX-103: first identifier column — Link opens the detail dialog.
       cell: (message) => (
-        <Button type="button" variant="link" className="font-medium underline-offset-4 hover:underline" onClick={() => void inspectMessage(message)}>
+        <Link
+          to={`/messages/${message.id}`}
+          className="text-primary underline-offset-4 hover:underline"
+          aria-label={`View message ${message.id}`}
+          onClick={(event) => { event.preventDefault(); void inspectMessage(message); }}
+        >
           {message.id}
-        </Button>
+        </Link>
       ),
     },
     {
@@ -298,19 +316,50 @@ export function MessagesPage() {
       sortValue: (message) => message.created_at ?? '',
       cell: (message) => message.created_at ? <RelativeTime timestamp={message.created_at} /> : 'N/A',
     },
-    {
-      id: 'actions',
-      header: 'Actions',
-      cell: (message) => (
-        <div className="flex flex-wrap gap-2">
-          <Button variant="secondary" onClick={() => void inspectMessage(message)}>View</Button>
-          <Button variant="secondary" onClick={() => { window.location.href = `/deliveries?message_id=${message.id}`; }}>Deliveries</Button>
-          <Button variant="secondary" onClick={() => window.open(`/messages/${message.id}?format=html`, '_blank', 'noopener,noreferrer')}>Open link</Button>
-          <Button variant="secondary" onClick={() => void cancelMessages([message])}>Cancel</Button>
-          <Button variant="secondary" onClick={() => void deleteMessages([message])}>Delete</Button>
-        </div>
-      ),
-    },
+    // CX-102 / CX-104: shared action-cell helper (View, Deliveries, Open link, Log, Cancel, Delete).
+    createDataTableActionColumn<MessageRecord>((message) => [
+      {
+        id: 'view',
+        label: 'View',
+        icon: <Eye className="h-4 w-4" />,
+        onClick: () => void inspectMessage(message),
+      },
+      {
+        id: 'deliveries',
+        label: 'Deliveries',
+        icon: <FileText className="h-4 w-4" />,
+        href: () => `/deliveries?message_id=${message.id}`,
+        title: () => `View deliveries for message ${message.id}`,
+      },
+      {
+        // NA-M-05: rename "Open link" -> "Open Message".
+        id: 'open-message',
+        label: 'Open Message',
+        icon: <ExternalLink className="h-4 w-4" />,
+        href: () => `/messages/${message.id}?format=html`,
+        title: () => `Open rendered message ${message.id}`,
+      },
+      {
+        id: 'log',
+        label: 'Log',
+        icon: <FileText className="h-4 w-4" />,
+        href: () => `/diagnostics-audit?actor=${encodeURIComponent(String(message.id))}`,
+        title: () => `View audit log for message ${message.id}`,
+      },
+      {
+        id: 'cancel',
+        label: 'Cancel',
+        icon: <XCircle className="h-4 w-4" />,
+        onClick: () => void cancelMessages([message]),
+      },
+      {
+        id: 'delete',
+        label: 'Delete',
+        icon: <Trash2 className="h-4 w-4" />,
+        destructive: true,
+        onClick: () => void deleteMessages([message]),
+      },
+    ]),
   ], [cancelMessages, deleteMessages, deliveryMap, inspectMessage]);
 
   const messageBulkActions = React.useMemo<BulkAction[]>(() => [
@@ -339,32 +388,32 @@ export function MessagesPage() {
     () => availablePrompts.find((item) => String(item.id) === composeValues.prompt_id) ?? null,
     [availablePrompts, composeValues.prompt_id],
   );
-  const activeMessageSummary = React.useMemo(() => {
-    if (!activeMessage) return null;
-    return {
-      id: activeMessage.id,
-      subject: activeMessage.subject ?? 'Untitled message',
-      status: activeMessageDetail?.status ?? activeMessage.status ?? 'unknown',
-      sender: activeMessage.created_by ?? 'N/A',
-      channel: activeMessage.channel_name ?? activeDeliveries[0]?.channel_name ?? 'N/A',
-      recipients: activeMessage.recipients ?? activeDeliveries.map((delivery) => delivery.destination ?? ''),
-      created_at: activeMessageDetail?.created_at ?? activeMessage.created_at ?? 'N/A',
-      body: activeMessageDetail?.formatted_content ?? activeMessageDetail?.content ?? 'N/A',
-      guid: activeMessageDetail?.guid ?? activeMessage.message_guid ?? 'N/A',
-      permalink: `/messages/${activeMessage.id}?format=html`,
-      format_applied: activeMessageDetail?.format_applied ?? 'N/A',
-      language_applied: activeMessageDetail?.language_applied ?? 'N/A',
-      delivery_total: activeMessageDetail?.deliveries?.total ?? activeDeliveries.length,
-      delivery_states: activeMessageDetail?.deliveries?.by_state ?? {},
-    };
-  }, [activeDeliveries.length, activeMessage, activeMessageDetail]);
+  // NA-M-07: collapse delivered_at across delivery records (latest non-null value)
+  // — falls back to undefined so the dialog can hide the field rather than show "N/A".
+  const collapsedDeliveredAt = React.useMemo(() => {
+    if (!activeDeliveries.length) return null;
+    const stamps = activeDeliveries
+      .map((d) => d.delivered_at)
+      .filter((x): x is string => Boolean(x))
+      .sort();
+    return stamps.length ? stamps[stamps.length - 1] : null;
+  }, [activeDeliveries]);
   const deliveryColumns = React.useMemo<DataColumn<DeliveryRecord>[]>(() => [
     {
       id: 'channel_name',
       header: 'Channel',
       sortable: true,
       sortValue: (delivery) => delivery.channel_name ?? '',
-      cell: (delivery) => delivery.channel_name ?? '',
+      // CX-103: first identifier column — Link to the deliveries page filtered by message.
+      cell: (delivery) => (
+        <Link
+          to={`/deliveries?message_id=${delivery.message_id ?? ''}`}
+          className="text-primary underline-offset-4 hover:underline"
+          aria-label={`View deliveries for channel ${delivery.channel_name ?? delivery.id}`}
+        >
+          {delivery.channel_name ?? delivery.id}
+        </Link>
+      ),
     },
     {
       id: 'destination',
@@ -385,6 +434,16 @@ export function MessagesPage() {
       header: 'Error',
       cell: (delivery) => delivery.error ?? '',
     },
+    // CX-102 / CX-104: shared action-cell helper (Log).
+    createDataTableActionColumn<DeliveryRecord>((delivery) => [
+      {
+        id: 'log',
+        label: 'Log',
+        icon: <FileText className="h-4 w-4" />,
+        href: () => `/diagnostics-audit?actor=${encodeURIComponent(String(delivery.id))}`,
+        title: () => `View audit log for delivery ${delivery.id}`,
+      },
+    ]),
   ], []);
 
   const deliveryBulkActions = React.useMemo<BulkAction[]>(() => [{ label: 'Export', action: 'export' }], []);
@@ -399,6 +458,9 @@ export function MessagesPage() {
     <div className="space-y-6">
       <header className="space-y-2">
         <h1 className="text-2xl font-semibold">Messages</h1>
+        <p className="text-xs text-muted-foreground">
+          Delivered At is shown from delivery records when present and hidden until populated. Delivery and prompt preferences are applied through message metadata and runtime formatting.
+        </p>
       </header>
 
       {latestFailure ? <p role="alert" className="text-sm text-destructive">{latestFailure}</p> : null}
@@ -420,7 +482,7 @@ export function MessagesPage() {
               />
             </div>
             <div className="min-w-48">
-              <Label htmlFor="messages-channel-filter-adopted">Route filter</Label>
+              <Label htmlFor="messages-channel-filter-adopted">Channel</Label>
               <Select id="messages-channel-filter-adopted" value={channelFilter} onChange={(event) => setChannelFilter(event.target.value)}>
                 <option value="">All channels</option>
                 {channels.map((channel) => (
@@ -437,43 +499,6 @@ export function MessagesPage() {
               <Button onClick={openCompose}>Compose message</Button>
             </div>
           </div>
-
-          <form className="grid gap-3 md:grid-cols-[12rem_12rem_1fr_auto]" onSubmit={(event) => {
-            event.preventDefault();
-            void sendMessage();
-          }}
-          >
-            <div className="space-y-2">
-              <Label htmlFor="messages-inline-channel">Channel</Label>
-              <Select
-                id="messages-inline-channel"
-                value={composeValues.channel}
-                onChange={(event) => setComposeValues((current) => ({ ...current, channel: event.target.value, prompt_id: '' }))}
-              >
-                {channels.map((channel) => (
-                  <option key={channel.id} value={channel.name}>{channel.name}</option>
-                ))}
-              </Select>
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="messages-inline-created-by">Created by</Label>
-              <Input
-                id="messages-inline-created-by"
-                value={composeValues.created_by}
-                onChange={(event) => setComposeValues((current) => ({ ...current, created_by: event.target.value }))}
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="messages-inline-body">Message body</Label>
-              <Textarea
-                id="messages-inline-body"
-                rows={3}
-                value={composeBody}
-                onChange={(event) => setComposeBody(event.target.value)}
-              />
-            </div>
-            <Button type="submit" className="self-end">Send notification</Button>
-          </form>
 
           {loading ? (
             <p className="text-sm text-muted-foreground">Loading messages...</p>
@@ -557,6 +582,13 @@ export function MessagesPage() {
         )}
       />
 
+      {/* NA-M-01 / NA-M-02 / NA-M-03: readable single-column form layout for
+          the View Message dialog (replaces the cramped two-column StructuredView
+          table). Same dialog is opened from Message rows AND from the
+          per-message Deliveries column. Settings/Destination/Content/Variables
+          render with the shared JsonExplorer (NA-M-06). Delivered At is sourced
+          from delivery records and hidden when no delivery has timestamped yet
+          (NA-M-07). */}
       <EntityDialog
         open={Boolean(activeMessage)}
         onOpenChange={(open) => {
@@ -567,46 +599,107 @@ export function MessagesPage() {
         }}
         title={activeMessage ? `Message ${activeMessage.id}` : 'Message detail'}
         body={activeMessage ? (
-        <div className="grid gap-4 lg:grid-cols-[2fr_1fr]">
-          <Card>
-            <CardHeader>
-              <h2 className="text-lg font-semibold">Deliveries for message {activeMessage.id}</h2>
-            </CardHeader>
-            <CardContent>
-              <DataTable
-                tableId="notification-message-deliveries"
-                columns={deliveryColumns}
-                rows={activeDeliveries}
-                getRowId={(delivery) => String(delivery.id)}
-                page={deliveryPage}
-                onPageChange={setDeliveryPage}
-                pageSize={deliveryPageSize}
-                onPageSizeChange={setDeliveryPageSize}
-                selectable={true}
-                bulkActions={deliveryBulkActions}
-                onBulkAction={onDeliveryBulkAction}
-                columnPickerEnabled={true}
-              />
-            </CardContent>
-          </Card>
-
           <div className="space-y-4">
+            <div className="flex items-start justify-end -mt-2">
+              <Button type="button" variant="secondary" size="sm" aria-label="Close" onClick={() => { setActiveMessage(null); setActiveMessageDetail(null); }}>
+                Close
+              </Button>
+            </div>
+
+            {/* Single-column readable summary (NA-M-01, NA-M-02). */}
             <Card>
               <CardHeader>
-                <h2 className="text-lg font-semibold">Message detail</h2>
+                <h2 className="text-lg font-semibold">Message {activeMessage.id}</h2>
               </CardHeader>
-              <CardContent className="space-y-4">
-                {activeMessageSummary ? <StructuredView title={`Message ${activeMessage.id}`} value={activeMessageSummary} /> : null}
-                {activeMessageDetail?.formatted_content || activeMessageDetail?.content ? (
-                  <div className="space-y-2">
-                    <Label>Rendered body</Label>
-                    <pre className="max-h-64 overflow-auto rounded-md border bg-muted/20 p-3 text-xs whitespace-pre-wrap">
-                      {activeMessageDetail?.formatted_content ?? activeMessageDetail?.content ?? ''}
-                    </pre>
-                  </div>
-                ) : null}
-                {activeMessageDetail?.content_json ? <JsonBlock title="Content JSON" value={activeMessageDetail.content_json} defaultCollapsed={false} /> : null}
-                {activeMessageDetail?.variables_json ? <JsonBlock title="Variables JSON" value={activeMessageDetail.variables_json} defaultCollapsed={false} /> : null}
+              <CardContent>
+                <dl className="grid grid-cols-1 gap-x-4 gap-y-2 text-sm md:grid-cols-[180px_1fr]">
+                  <dt className="font-medium text-muted-foreground">Subject</dt>
+                  <dd>{activeMessage.subject ?? 'Untitled message'}</dd>
+                  <dt className="font-medium text-muted-foreground">Status</dt>
+                  <dd><Badge variant={messageStatusVariant(activeMessageDetail?.status ?? activeMessage.status)}>{activeMessageDetail?.status ?? activeMessage.status ?? 'unknown'}</Badge></dd>
+                  <dt className="font-medium text-muted-foreground">Sender</dt>
+                  <dd>{activeMessage.created_by ?? 'N/A'}</dd>
+                  <dt className="font-medium text-muted-foreground">Channel</dt>
+                  <dd>{activeMessage.channel_name ?? activeDeliveries[0]?.channel_name ?? 'N/A'}</dd>
+                  <dt className="font-medium text-muted-foreground">Recipients</dt>
+                  <dd>{(activeMessage.recipients ?? activeDeliveries.map((d) => d.destination ?? '')).filter(Boolean).join(', ') || 'N/A'}</dd>
+                  <dt className="font-medium text-muted-foreground">Created at</dt>
+                  <dd>{(activeMessageDetail?.created_at ?? activeMessage.created_at) ? <RelativeTime timestamp={String(activeMessageDetail?.created_at ?? activeMessage.created_at)} /> : 'N/A'}</dd>
+                  {/* NA-M-07: only render Delivered At when at least one delivery has timestamped. */}
+                  {collapsedDeliveredAt ? (
+                    <>
+                      <dt className="font-medium text-muted-foreground">Delivered at</dt>
+                      <dd><RelativeTime timestamp={collapsedDeliveredAt} /></dd>
+                    </>
+                  ) : null}
+                  <dt className="font-medium text-muted-foreground">GUID</dt>
+                  <dd className="font-mono break-all text-xs">{activeMessageDetail?.guid ?? activeMessage.message_guid ?? 'N/A'}</dd>
+                  <dt className="font-medium text-muted-foreground">Format applied</dt>
+                  <dd>{activeMessageDetail?.format_applied ?? 'N/A'}</dd>
+                  <dt className="font-medium text-muted-foreground">Language applied</dt>
+                  <dd>{activeMessageDetail?.language_applied ?? 'N/A'}</dd>
+                  <dt className="font-medium text-muted-foreground">Delivery count</dt>
+                  <dd>{String(activeMessageDetail?.deliveries?.total ?? activeDeliveries.length)}</dd>
+                </dl>
+              </CardContent>
+            </Card>
+
+            {/* Rendered body — full width single column. */}
+            {activeMessageDetail?.formatted_content || activeMessageDetail?.content ? (
+              <Card>
+                <CardHeader>
+                  <h2 className="text-lg font-semibold">Rendered body</h2>
+                </CardHeader>
+                <CardContent>
+                  <pre className="max-h-80 overflow-auto rounded-md border bg-muted/20 p-3 text-xs whitespace-pre-wrap break-words">
+                    {activeMessageDetail?.formatted_content ?? activeMessageDetail?.content ?? ''}
+                  </pre>
+                </CardContent>
+              </Card>
+            ) : null}
+
+            {/* NA-M-06: Settings (variables) / Destination (content) blocks via
+                the shared JsonExplorer pattern (searchable, expandable tree). */}
+            {activeMessageDetail?.content_json ? (
+              <Card>
+                <CardHeader>
+                  <h2 className="text-lg font-semibold">Content / Destination</h2>
+                </CardHeader>
+                <CardContent>
+                  <JsonExplorer data={activeMessageDetail.content_json} defaultExpanded={true} />
+                </CardContent>
+              </Card>
+            ) : null}
+            {activeMessageDetail?.variables_json ? (
+              <Card>
+                <CardHeader>
+                  <h2 className="text-lg font-semibold">Settings / Variables</h2>
+                </CardHeader>
+                <CardContent>
+                  <JsonExplorer data={activeMessageDetail.variables_json} defaultExpanded={true} />
+                </CardContent>
+              </Card>
+            ) : null}
+
+            <Card>
+              <CardHeader>
+                <h2 className="text-lg font-semibold">Deliveries for message {activeMessage.id}</h2>
+              </CardHeader>
+              <CardContent>
+                <DataTable
+                  tableId="notification-message-deliveries"
+                  columns={deliveryColumns}
+                  rows={activeDeliveries}
+                  getRowId={(delivery) => String(delivery.id)}
+                  page={deliveryPage}
+                  onPageChange={setDeliveryPage}
+                  pageSize={deliveryPageSize}
+                  onPageSizeChange={setDeliveryPageSize}
+                  selectable={true}
+                  bulkActions={deliveryBulkActions}
+                  onBulkAction={onDeliveryBulkAction}
+                  columnPickerEnabled={true}
+                />
               </CardContent>
             </Card>
 
@@ -616,7 +709,6 @@ export function MessagesPage() {
               emptyMessage="No deliveries recorded for this message."
             />
           </div>
-        </div>
         ) : null}
       />
     </div>

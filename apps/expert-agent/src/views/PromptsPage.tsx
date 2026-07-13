@@ -1,8 +1,9 @@
 import * as React from 'react';
+import { Link } from 'react-router-dom';
 import { Button, JsonBlock, Label, Textarea, type EntityFieldDef, type EntityFormMode } from '@cloud-dog/ui';
 import { useAuthz } from '../lib/authz';
 import { useExpertAgentState } from '../state/AppState';
-import type { ExpertRecord, PromptGenerateResult, PromptTemplateRecord, PromptTestCase, PromptValidation } from '../lib/api';
+import type { ChannelRecord, ExpertRecord, KnowledgeRecord, PromptGenerateResult, PromptTemplateRecord, PromptValidation } from '../lib/api';
 import { AppDataTable, CrudEntityDialog } from '../lib/data-table-adapter';
 import { PageScaffold, formatCount } from './shared';
 
@@ -11,15 +12,22 @@ const defaultPrompt = 'You are an expert assistant that must answer with concise
 
 export function PromptsPage() {
   const authz = useAuthz();
-  const { api, latestFailure, captureFailure, clearFailure } = useExpertAgentState();
+  const { api, latestFailure, captureFailure, clearFailure, setPromptTestCases } = useExpertAgentState();
   const [templates, setTemplates] = React.useState<PromptTemplateRecord[]>([]);
   const [experts, setExperts] = React.useState<ExpertRecord[]>([]);
   const [promptExperts, setPromptExperts] = React.useState<Record<number, Array<{ expert_id: number; expert_name?: string }>>>({});
-  const [cases, setCases] = React.useState<PromptTestCase[]>([]);
+  // EA-87: channel + knowledge context available to the workbench.
+  const [channels, setChannels] = React.useState<ChannelRecord[]>([]);
+  const [knowledge, setKnowledge] = React.useState<KnowledgeRecord[]>([]);
   const [validation, setValidation] = React.useState<PromptValidation | null>(null);
   const [generatedPrompt, setGeneratedPrompt] = React.useState<PromptGenerateResult | null>(null);
   const [preview, setPreview] = React.useState<string | null>(null);
   const [selectedExpertId, setSelectedExpertId] = React.useState<number | undefined>(undefined);
+  // EA-87: channel context (→ context_type), outcomes (→ expected_outcomes) and
+  // selected knowledge entries (→ available_tools) threaded into the request.
+  const [selectedChannelId, setSelectedChannelId] = React.useState<number | undefined>(undefined);
+  const [outcomes, setOutcomes] = React.useState('');
+  const [selectedKnowledgeIds, setSelectedKnowledgeIds] = React.useState<string[]>([]);
   const [name, setName] = React.useState('');
   const [content, setContent] = React.useState(defaultPrompt);
   const [editingId, setEditingId] = React.useState<number | null>(null);
@@ -32,9 +40,18 @@ export function PromptsPage() {
     clearFailure();
     setLoading(true);
     try {
-      const [tpls, exps] = await Promise.all([api.listPromptTemplates(), api.listExperts()]);
+      // EA-87: also load channels + knowledge so the workbench can attach
+      // channel context, outcomes, and knowledge to prompt generation.
+      const [tpls, exps, chans, know] = await Promise.all([
+        api.listPromptTemplates(),
+        api.listExperts(),
+        api.listChannels().catch(() => [] as ChannelRecord[]),
+        api.listKnowledge().catch(() => [] as KnowledgeRecord[]),
+      ]);
       setTemplates(tpls);
       setExperts(exps);
+      setChannels(chans);
+      setKnowledge(know);
       // EXPWEB-111: fetch prompt-expert assignments
       const assignMap: Record<number, Array<{ expert_id: number; expert_name?: string }>> = {};
       await Promise.all(tpls.map(async (t) => {
@@ -118,7 +135,6 @@ export function PromptsPage() {
   }, [api, captureFailure, clearFailure, closeDialog, content, editingId, name, refresh]);
 
   const deleteTemplate = React.useCallback(async (template: PromptTemplateRecord) => {
-    if (!window.confirm(`Delete prompt template ${template.name}?`)) return;
     clearFailure();
     try {
       await api.deletePromptTemplate(template.id);
@@ -131,27 +147,60 @@ export function PromptsPage() {
   }, [api, captureFailure, clearFailure, refresh]);
 
   const activePrompt = content.trim() || defaultPrompt;
+
+  // EA-87: assemble the channel + knowledge + outcomes context sent to the
+  // prompt-generation endpoints. A selected channel contributes its
+  // context_type (falling back to expected_outcomes if the outcomes field is
+  // empty); the outcomes field maps to expected_outcomes; selected knowledge
+  // entries map to available_tools by their titles.
+  const buildGenerateContext = React.useCallback(() => {
+    const channel = channels.find((c) => c.id === selectedChannelId);
+    const contextType = channel?.context_type ?? undefined;
+    const expectedOutcomes = outcomes.trim() || channel?.expected_outcomes || undefined;
+    const availableTools = selectedKnowledgeIds
+      .map((id) => knowledge.find((k) => String(k.id ?? k.entry_id ?? k.knowledge_id) === id))
+      .map((k) => k?.title ?? k?.description ?? undefined)
+      .filter((label): label is string => Boolean(label));
+    return {
+      expertId: selectedExpertId,
+      contextType: contextType ?? undefined,
+      expectedOutcomes: expectedOutcomes ?? undefined,
+      availableTools,
+    };
+  }, [channels, knowledge, outcomes, selectedChannelId, selectedExpertId, selectedKnowledgeIds]);
+
+  const contextSummary = React.useCallback(() => {
+    const parts: string[] = [];
+    if (selectedExpertId) parts.push(`expert ID ${selectedExpertId}`);
+    if (selectedChannelId) parts.push(`channel ${channels.find((c) => c.id === selectedChannelId)?.name ?? selectedChannelId}`);
+    if (outcomes.trim()) parts.push('outcomes');
+    if (selectedKnowledgeIds.length) parts.push(`${selectedKnowledgeIds.length} knowledge`);
+    return parts.length ? ` Context: ${parts.join(', ')}.` : '';
+  }, [channels, outcomes, selectedChannelId, selectedExpertId, selectedKnowledgeIds]);
+
   const onGenerateTestCases = React.useCallback(async () => {
     clearFailure();
     try {
-      const nextCases = await api.generatePromptTestCases(activePrompt, selectedExpertId);
-      setCases(nextCases);
-      setStatus(`Generated ${nextCases.length} test cases.${selectedExpertId ? ` Expert context: ID ${selectedExpertId}` : ''}`);
+      const nextCases = await api.generatePromptTestCases(activePrompt, buildGenerateContext());
+      // EA-89: publish to shared state; the dedicated /prompts/test-cases page renders them.
+      const expertLabel = selectedExpertId ? (experts.find((e) => e.id === selectedExpertId)?.name ?? `Expert ${selectedExpertId}`) : undefined;
+      setPromptTestCases({ cases: nextCases, prompt: activePrompt, expertLabel, generatedAt: new Date().toISOString() });
+      setStatus(`Generated ${nextCases.length} test cases — view them on the Test Cases page.${contextSummary()}`);
     } catch (error) {
       captureFailure(error);
     }
-  }, [activePrompt, api, captureFailure, clearFailure, selectedExpertId]);
+  }, [activePrompt, api, buildGenerateContext, captureFailure, clearFailure, contextSummary, experts, selectedExpertId, setPromptTestCases]);
 
   const onGeneratePrompt = React.useCallback(async () => {
     clearFailure();
     try {
-      const result = await api.generatePrompt(activePrompt, selectedExpertId);
+      const result = await api.generatePrompt(activePrompt, buildGenerateContext());
       setGeneratedPrompt(result);
-      setStatus(`Generated prompt.${selectedExpertId ? ` Expert context: ID ${selectedExpertId}` : ''}`);
+      setStatus(`Generated prompt.${contextSummary()}`);
     } catch (error) {
       captureFailure(error);
     }
-  }, [activePrompt, api, captureFailure, clearFailure, selectedExpertId]);
+  }, [activePrompt, api, buildGenerateContext, captureFailure, clearFailure, contextSummary]);
 
   const onValidate = React.useCallback(async () => {
     clearFailure();
@@ -252,6 +301,62 @@ export function PromptsPage() {
             </select>
           </div>
         ) : null}
+        {/* EA-87: channel + outcomes + knowledge context wired into /prompts/generate. */}
+        <div className="grid gap-3 md:grid-cols-2" data-testid="prompt-generation-context">
+          <div className="flex items-center gap-2">
+            <Label htmlFor="channel-context-select" className="text-sm whitespace-nowrap">Channel context:</Label>
+            <select
+              id="channel-context-select"
+              className="rounded border bg-background px-2 py-1 text-sm"
+              value={selectedChannelId ?? ''}
+              onChange={(e) => setSelectedChannelId(e.target.value ? Number(e.target.value) : undefined)}
+              data-testid="channel-context-dropdown"
+            >
+              <option value="">None (no channel context)</option>
+              {channels.map((c) => <option key={c.id} value={c.id}>{c.name}{c.context_type ? ` — ${c.context_type}` : ''}</option>)}
+            </select>
+          </div>
+          <label className="flex items-center gap-2">
+            <Label htmlFor="outcomes-context-input" className="text-sm whitespace-nowrap">Expected outcomes:</Label>
+            <input
+              id="outcomes-context-input"
+              type="text"
+              className="flex-1 rounded border bg-background px-2 py-1 text-sm"
+              placeholder="e.g. concise, evidence-backed answers"
+              value={outcomes}
+              onChange={(e) => setOutcomes(e.target.value)}
+              data-testid="outcomes-context-input"
+            />
+          </label>
+        </div>
+        {knowledge.length > 0 ? (
+          <div className="space-y-1" data-testid="knowledge-context-selector">
+            <span className="text-sm font-medium">Knowledge context (available tools):</span>
+            {/* Checkboxes (not a controlled multi-select) keep selection state
+                simple and avoid controlled <select multiple> reconciliation loops. */}
+            <div className="flex flex-wrap gap-3" data-testid="knowledge-context-dropdown">
+              {knowledge.map((k) => {
+                const kid = String(k.id ?? k.entry_id ?? k.knowledge_id ?? '');
+                const label = k.title ?? k.description ?? `Knowledge ${kid}`;
+                const checked = selectedKnowledgeIds.includes(kid);
+                return (
+                  <label key={kid} className="inline-flex items-center gap-1 text-sm">
+                    <input
+                      type="checkbox"
+                      value={kid}
+                      checked={checked}
+                      data-testid={`knowledge-context-option-${kid}`}
+                      onChange={(e) => setSelectedKnowledgeIds((current) =>
+                        e.target.checked ? [...current, kid] : current.filter((id) => id !== kid),
+                      )}
+                    />
+                    {label}
+                  </label>
+                );
+              })}
+            </div>
+          </div>
+        ) : null}
         {/* EXPWEB-119: Variable picker — shows detected variables and common variable suggestions */}
         {(() => {
           const detected = (content.match(/\{\{([^}]+)\}\}/g) ?? []).map((m) => m.replace(/^\{\{|\}\}$/g, '').trim());
@@ -273,6 +378,11 @@ export function PromptsPage() {
           <Button type="button" variant="secondary" onClick={() => void onGeneratePrompt()} disabled={!content.trim()} data-testid="generate-prompt-btn">Generate prompt</Button>
           <Button type="button" variant="secondary" onClick={() => void onGenerateTestCases()} disabled={!content.trim()} data-testid="generate-test-cases-btn">Generate test cases</Button>
         </div>
+        {/* EA-89: jump to the dedicated generated-test-cases surface. */}
+        <p className="text-right text-xs text-muted-foreground">
+          Generated test cases open on the{' '}
+          <Link to="/prompts/test-cases" className="text-primary underline" data-testid="test-cases-page-link">Test Cases page</Link>.
+        </p>
       </div>
       {/* EXPWEB-116: Validation result display */}
       {validation !== null ? (
@@ -319,22 +429,15 @@ export function PromptsPage() {
           ) : null}
         </div>
       ) : null}
-      {(cases.length > 0 || preview !== null) ? (
-        <div className="grid gap-4 lg:grid-cols-2">
-          {cases.length > 0 ? (
-            <div className="rounded-xl border bg-background p-4">
-              <h2 className="text-lg font-semibold">Generated test cases ({cases.length})</h2>
-              <ul className="mt-3 space-y-2 text-sm">{cases.map((item, index) => <li key={`${item.name ?? 'case'}-${index}`} className="rounded border p-3"><p className="font-medium">{item.name ?? `Case ${index + 1}`}</p><p className="text-muted-foreground">{item.objective ?? 'No objective returned.'}</p></li>)}</ul>
-            </div>
-          ) : null}
-          {preview !== null ? (
-            <div className="rounded-xl border bg-background p-4">
-              <h2 className="text-lg font-semibold">Prompt preview</h2>
-              <div className="mt-3">
-                <JsonBlock title="Rendered preview" value={preview} defaultCollapsed={false} />
-              </div>
-            </div>
-          ) : null}
+      {/* EA-89: generated test cases moved to a dedicated /prompts/test-cases
+          surface. Generating from the workbench populates that page; here we only
+          link across so /prompts stays focused on template CRUD + the workbench. */}
+      {preview !== null ? (
+        <div className="rounded-xl border bg-background p-4" data-testid="prompt-preview-block">
+          <h2 className="text-lg font-semibold">Prompt preview</h2>
+          <div className="mt-3">
+            <JsonBlock title="Rendered preview" value={preview} defaultCollapsed={false} />
+          </div>
         </div>
       ) : null}
       {authz.isAdmin ? (

@@ -18,6 +18,8 @@ type ExpertForm = {
   temperature: string;
   top_k: string;
   max_tokens: string;
+  num_ctx: string;
+  think: boolean;
   enabled: boolean;
 };
 
@@ -31,6 +33,8 @@ const emptyForm: ExpertForm = {
   temperature: '0.7',
   top_k: '',
   max_tokens: '1024',
+  num_ctx: '8192',
+  think: false,
   enabled: true,
 };
 
@@ -50,6 +54,7 @@ function validate(form: ExpertForm): Record<string, string> {
   if (form.temperature && (Number(form.temperature) < 0 || Number(form.temperature) > 2)) errors.temperature = 'Temperature must be 0-2.';
   if (form.top_k && Number(form.top_k) < 0) errors.top_k = 'Top-K must be >= 0.';
   if (form.max_tokens && Number(form.max_tokens) < 1) errors.max_tokens = 'Max tokens must be >= 1.';
+  if (form.num_ctx && Number(form.num_ctx) < 1) errors.num_ctx = 'Context window must be >= 1.';
   return errors;
 }
 
@@ -177,6 +182,15 @@ export function ExpertsPage() {
 
   const openEdit = React.useCallback((expert: ExpertRecord) => {
     setEditingId(expert.id);
+    // Per-expert LLM settings are stored in llm_params; the API also surfaces them top-level.
+    const params = (expert.llm_params ?? {}) as Record<string, unknown>;
+    const cfg = <T,>(key: string, top: T | null | undefined): T | undefined =>
+      (params[key] as T | undefined) ?? (top ?? undefined);
+    const temperature = cfg<number>('temperature', expert.temperature);
+    const topK = cfg<number>('top_k', expert.top_k);
+    const maxTokens = cfg<number>('max_tokens', expert.max_tokens) ?? cfg<number>('num_predict', expert.num_predict);
+    const numCtx = cfg<number>('num_ctx', expert.num_ctx);
+    const think = cfg<boolean>('think', expert.think);
     setForm({
       name: expert.name,
       title: expert.title ?? expert.name,
@@ -184,9 +198,11 @@ export function ExpertsPage() {
       prompt_template: expert.prompt_template ?? '',
       llm_provider: expert.llm_provider ?? 'ollama',
       llm_model: expert.llm_model ?? 'qwen3:14b',
-      temperature: expert.temperature != null ? String(expert.temperature) : '0.7',
-      top_k: expert.top_k != null ? String(expert.top_k) : '',
-      max_tokens: expert.max_tokens != null ? String(expert.max_tokens) : '1024',
+      temperature: temperature != null ? String(temperature) : '0.7',
+      top_k: topK != null ? String(topK) : '',
+      max_tokens: maxTokens != null ? String(maxTokens) : '1024',
+      num_ctx: numCtx != null ? String(numCtx) : '8192',
+      think: think === true,
       enabled: expert.enabled !== false,
     });
     setErrors({});
@@ -215,11 +231,28 @@ export function ExpertsPage() {
     setSaving(true);
     clearFailure();
     try {
+      const num = (s: string): number | undefined => (s !== '' && s != null ? Number(s) : undefined);
+      // Package the per-expert LLM settings into llm_params (the single source of truth the
+      // executor + agent adapters read) and also send them top-level for back-compat (FR-053).
+      const llm_params: Record<string, unknown> = { think: form.think };
+      if (num(form.temperature) !== undefined) llm_params.temperature = num(form.temperature);
+      if (num(form.top_k) !== undefined) llm_params.top_k = num(form.top_k);
+      if (num(form.max_tokens) !== undefined) llm_params.max_tokens = num(form.max_tokens);
+      if (num(form.num_ctx) !== undefined) llm_params.num_ctx = num(form.num_ctx);
       const payload = {
-        ...form,
-        temperature: form.temperature ? Number(form.temperature) : undefined,
-        top_k: form.top_k ? Number(form.top_k) : undefined,
-        max_tokens: form.max_tokens ? Number(form.max_tokens) : undefined,
+        name: form.name,
+        title: form.title,
+        description: form.description,
+        prompt_template: form.prompt_template,
+        llm_provider: form.llm_provider,
+        llm_model: form.llm_model,
+        enabled: form.enabled,
+        temperature: num(form.temperature),
+        top_k: num(form.top_k),
+        max_tokens: num(form.max_tokens),
+        num_ctx: num(form.num_ctx),
+        think: form.think,
+        llm_params,
       };
       let savedId = editingId;
       if (editingId === null) {
@@ -245,7 +278,6 @@ export function ExpertsPage() {
   }, [api, boundServiceIds, boundSubExpertIds, captureFailure, clearFailure, closeDialog, editingId, form, refresh]);
 
   const deleteExpert = React.useCallback(async (expert: ExpertRecord) => {
-    if (!window.confirm(`Delete expert ${expert.name}?`)) return;
     clearFailure();
     try {
       await api.deleteExpert(expert.id);
@@ -351,7 +383,7 @@ export function ExpertsPage() {
   }, [api, captureFailure, clearFailure, probePrompt, probeTarget]);
 
   const bulkDelete = React.useCallback(async (selected: ExpertRecord[]) => {
-    if (!selected.length || !window.confirm(`Delete ${selected.length} selected experts?`)) return;
+    if (!selected.length) return;
     clearFailure();
     try {
       await Promise.all(selected.map(async (expert) => api.deleteExpert(expert.id)));
@@ -624,7 +656,7 @@ export function ExpertsPage() {
                 <Textarea id="expert-prompt" data-testid="expert-system-prompt" rows={6} value={form.prompt_template} onChange={(event) => setForm((current) => ({ ...current, prompt_template: event.target.value }))} />
                 <p className="text-xs text-muted-foreground">The system prompt is sent to the LLM as the first message in every conversation with this expert.</p>
               </label>
-              {/* EXPWEB-019: Temperature, Top-K, Max Tokens */}
+              {/* EXPWEB-019 / FR-053: per-expert LLM config — Temperature, Top-K, Max Tokens, Context window */}
               <div className="grid grid-cols-3 gap-4">
                 <label className="space-y-2 block">
                   <Label htmlFor="expert-temperature">Temperature</Label>
@@ -637,9 +669,21 @@ export function ExpertsPage() {
                   {errors.top_k ? <p className="text-xs text-destructive">{errors.top_k}</p> : null}
                 </label>
                 <label className="space-y-2 block">
-                  <Label htmlFor="expert-max-tokens">Max Tokens</Label>
+                  <Label htmlFor="expert-max-tokens">Max Tokens (output)</Label>
                   <Input id="expert-max-tokens" data-testid="expert-max-tokens" type="number" min="1" value={form.max_tokens} onChange={(event) => setForm((current) => ({ ...current, max_tokens: event.target.value }))} />
                   {errors.max_tokens ? <p className="text-xs text-destructive">{errors.max_tokens}</p> : null}
+                </label>
+                <label className="space-y-2 block">
+                  <Label htmlFor="expert-num-ctx">Context window (num_ctx)</Label>
+                  <Input id="expert-num-ctx" data-testid="expert-num-ctx" type="number" min="1" step="1024" value={form.num_ctx} onChange={(event) => setForm((current) => ({ ...current, num_ctx: event.target.value }))} />
+                  {errors.num_ctx ? <p className="text-xs text-destructive">{errors.num_ctx}</p> : <p className="text-xs text-muted-foreground">Tokens of context; too small truncates long prompts.</p>}
+                </label>
+                <label className="space-y-2 block col-span-2">
+                  <Label htmlFor="expert-think">Reasoning (think) mode</Label>
+                  <div className="flex items-center gap-2 pt-2">
+                    <Checkbox id="expert-think" data-testid="expert-think" checked={form.think} onChange={(event) => setForm((current) => ({ ...current, think: event.target.checked }))} />
+                    <span className="text-xs text-muted-foreground">Enable model &lt;think&gt; reasoning (qwen3). Output is stripped before delivery.</span>
+                  </div>
                 </label>
               </div>
               {/* EXPWEB-026: Service binding multiselect */}

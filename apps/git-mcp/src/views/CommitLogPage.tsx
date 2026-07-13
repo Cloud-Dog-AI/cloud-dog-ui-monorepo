@@ -15,7 +15,8 @@
 // @cloud-dog/app-git-mcp — Commit history page for filtered log browsing and commit detail review.
 
 import * as React from "react";
-import { Badge, Button, Card, CardContent, CardHeader, DataTable, Input, JsonBlock, Label, RelativeTime, type DataColumn } from "@cloud-dog/ui";
+import { Badge, Button, Card, CardContent, CardHeader, Combobox, DataTable, DateRangePicker, JsonBlock, Label, SessionsHistoryPanel, fromISODate, toISODate, type ComboboxOption, type DataColumn } from "@cloud-dog/ui";
+import type { SessionsHistoryAction, SessionsHistoryRow } from "@cloud-dog/ui";
 import { useGitMcpState } from "../state/AppState";
 import { buildWorkspaceOpenArgs, useWorkspaceSession, WorkspaceSessionCard } from "./WorkspaceSessionCard";
 import { parseDiffSummary, parseGitLogOutput, type CommitRecord, type DiffSummaryRow } from "../lib/gitUi";
@@ -34,6 +35,9 @@ export function CommitLogPage() {
   const [error, setError] = React.useState<string | null>(null);
   const [page, setPage] = React.useState(1);
   const [pageSize, setPageSize] = React.useState(10);
+  // GM-CM-03: author/path filters are populated comboboxes (allowCustom keeps free-text filtering available).
+  const [authorOptions, setAuthorOptions] = React.useState<ComboboxOption[]>([]);
+  const [pathOptions, setPathOptions] = React.useState<ComboboxOption[]>([]);
 
   const openWorkspace = React.useCallback(async () => {
     setError(null);
@@ -86,29 +90,62 @@ export function CommitLogPage() {
     })();
   }, [app, selectedCommit, session.workspaceId]);
 
-  const columns: DataColumn<CommitRecord>[] = [
+  React.useEffect(() => {
+    if (!session.workspaceId) {
+      setAuthorOptions([]);
+      setPathOptions([]);
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      try {
+        const [authors, paths] = await Promise.all([
+          app.api.listWorkspaceAuthors(app.apiKey, session.workspaceId),
+          app.api.listWorkspacePaths(app.apiKey, session.workspaceId),
+        ]);
+        if (cancelled) return;
+        setAuthorOptions(authors.map((row) => ({ value: row.value, label: row.label })));
+        setPathOptions(paths.map((row) => ({ value: row.value, label: row.label })));
+      } catch {
+        // Selectors degrade gracefully to free-text entry (Combobox allowCustom).
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [app.api, app.apiKey, session.workspaceId]);
+
+  const commitByHash = React.useMemo(() => new Map(commits.map((commit) => [commit.hash, commit])), [commits]);
+
+  const panelRows = React.useMemo<SessionsHistoryRow[]>(() => commits.map((commit) => ({
+    id: commit.hash,
+    label: commit.hash.slice(0, 12),
+    title: <span className="font-mono">{commit.hash.slice(0, 12)}</span>,
+    status: "Completed",
+    actor: commit.author || "Unknown",
+    target: session.workspaceId ?? "Workspace",
+    createdAt: commit.date ? new Date(commit.date).toISOString() : undefined,
+    retention: "Git history",
+    summary: commit.message,
+    details: [
+      { label: "Hash", value: <span className="font-mono text-xs">{commit.hash}</span> },
+      { label: "Author", value: commit.author || "Unknown" },
+      { label: "Type", value: commit.merge ? <Badge>Merge</Badge> : <Badge variant="secondary">Commit</Badge> },
+      { label: "Message", value: commit.message },
+      ...(commit.body ? [{ label: "Body", value: <span className="whitespace-pre-wrap">{commit.body}</span> }] : []),
+    ],
+  })), [commits, session.workspaceId]);
+
+  const rowActions = React.useCallback((row: SessionsHistoryRow): SessionsHistoryAction[] => [
     {
-      id: "hash",
-      header: "Commit",
-      sortable: true,
-      sortValue: (row) => row.hash,
-      cell: (row) => (
-        <Button type="button" className="font-mono text-primary hover:underline" onClick={() => setSelectedCommit(row)}>
-          {row.hash.slice(0, 12)}
-        </Button>
-      ),
+      id: "inspect",
+      label: "Inspect",
+      onClick: () => {
+        const commit = commitByHash.get(row.id);
+        if (commit) setSelectedCommit(commit);
+      },
     },
-    { id: "author", header: "Author", sortable: true, sortValue: (row) => row.author, cell: (row) => row.author || "Unknown" },
-    {
-      id: "date",
-      header: "Date",
-      sortable: true,
-      sortValue: (row) => row.date,
-      cell: (row) => row.date ? <RelativeTime timestamp={new Date(row.date).toISOString()} /> : "N/A",
-    },
-    { id: "message", header: "Message", sortable: true, sortValue: (row) => row.message, cell: (row) => row.message },
-    { id: "merge", header: "Type", sortable: true, sortValue: (row) => (row.merge ? "merge" : "commit"), cell: (row) => row.merge ? <Badge>Merge</Badge> : <Badge variant="secondary">Commit</Badge> },
-  ];
+  ], [commitByHash]);
 
   const changedFileColumns: DataColumn<DiffSummaryRow>[] = [
     { id: "path", header: "Path", sortable: true, sortValue: (row) => row.path, cell: (row) => row.path },
@@ -119,7 +156,7 @@ export function CommitLogPage() {
   return (
     <div className="space-y-6">
       <header className="flex flex-wrap items-center gap-3">
-        <h1 className="text-2xl font-bold">Commit Log Viewer</h1>
+        <h1 className="text-2xl font-bold">Commit History</h1>
         {selectedCommit ? <Badge variant="secondary">{selectedCommit.hash.slice(0, 12)}</Badge> : null}
       </header>
 
@@ -128,51 +165,47 @@ export function CommitLogPage() {
         onOpenWorkspace={openWorkspace}
         status={status}
         error={error}
-        title="Commit history context"
+        title="Commit History Context"
         actions={
           <>
-            <label className="space-y-2">
-              <Label htmlFor="commit-log-author">Author</Label>
-              <Input id="commit-log-author" value={author} onChange={(event) => setAuthor(event.target.value)} placeholder="Filter by author" />
-            </label>
-            <label className="space-y-2">
-              <Label htmlFor="commit-log-since">Since</Label>
-              <Input id="commit-log-since" value={since} onChange={(event) => setSince(event.target.value)} placeholder="2026-04-01" />
-            </label>
-            <label className="space-y-2">
-              <Label htmlFor="commit-log-until">Until</Label>
-              <Input id="commit-log-until" value={until} onChange={(event) => setUntil(event.target.value)} placeholder="2026-04-30" />
-            </label>
-            <label className="space-y-2">
-              <Label htmlFor="commit-log-path">Path</Label>
-              <Input id="commit-log-path" value={filePath} onChange={(event) => setFilePath(event.target.value)} placeholder="src/README.md" />
-            </label>
+            <div className="space-y-2">
+              <Label>Author</Label>
+              <Combobox aria-label="Author" options={authorOptions} value={author} onChange={setAuthor} allowCustom placeholder="Filter by author" />
+            </div>
+            <div className="space-y-2">
+              <Label>Since / Until</Label>
+              <DateRangePicker
+                value={{ start: fromISODate(since), end: fromISODate(until) }}
+                onChange={(range) => { setSince(toISODate(range.start)); setUntil(toISODate(range.end)); }}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label>Path</Label>
+              <Combobox aria-label="Path" options={pathOptions} value={filePath} onChange={setFilePath} allowCustom placeholder="src/README.md" />
+            </div>
             <Button variant="secondary" onClick={() => void loadLog()} disabled={!session.workspaceId}>Load commits</Button>
           </>
         }
       />
 
       <div className="grid gap-6 xl:grid-cols-[1.2fr_0.8fr]">
-        <Card>
-          <CardHeader>
-            <h2 className="text-xl font-semibold">History</h2>
-          </CardHeader>
-          <CardContent>
-            <DataTable
-              tableId="git-mcp.commit-log.columns"
-              columns={columns}
-              rows={commits}
-              totalRows={commits.length}
-              getRowId={(row) => row.hash}
-              emptyMessage="No commits matched the current filters."
-              page={page}
-              onPageChange={setPage}
-              pageSize={pageSize}
-              onPageSizeChange={setPageSize}
-              columnPickerEnabled={true}
-            />
-          </CardContent>
-        </Card>
+        <SessionsHistoryPanel
+          title="History"
+          headingLevel={2}
+          variant="history"
+          description="Filtered commit history for the opened workspace."
+          rows={panelRows}
+          emptyMessage="No commits matched the current filters."
+          canonicalRoute="/history"
+          legacyAliases={["/log", "/commits"]}
+          actionsForRow={rowActions}
+          page={page}
+          onPageChange={setPage}
+          pageSize={pageSize}
+          onPageSizeChange={setPageSize}
+          totalRows={commits.length}
+          tableId="git-mcp.commit-log.columns"
+        />
 
         <Card>
           <CardHeader>

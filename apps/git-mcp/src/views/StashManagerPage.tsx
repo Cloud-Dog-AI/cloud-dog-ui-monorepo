@@ -144,7 +144,7 @@ export function StashManagerPage() {
         onOpenWorkspace={openWorkspace}
         status={status}
         error={error}
-        title="Stash workspace context"
+        title="Stash Workspace Context"
         actions={
           <>
             <Button variant="secondary" onClick={() => void refresh(true)} disabled={!session.workspaceId}>Refresh stashes</Button>
@@ -175,7 +175,11 @@ export function StashManagerPage() {
             <h2 className="text-xl font-semibold">Selected stash</h2>
           </CardHeader>
           <CardContent>
-            <JsonBlock title={selected?.ref ?? "Stash detail"} value={selected ?? { state: "No stash selected." }} defaultCollapsed={false} />
+            {selected ? (
+              <JsonBlock title={selected.ref ?? "Stash detail"} value={selected} defaultCollapsed={false} />
+            ) : (
+              <p className="text-sm text-muted-foreground">Select a stash from the list to view its details.</p>
+            )}
           </CardContent>
         </Card>
       </div>

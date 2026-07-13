@@ -35,7 +35,7 @@ Run `imap-mcp-server` with the API endpoint available at `/api/v1` and MCP at `/
 Example used by Playwright:
 
 ```bash
-cd <your-workspace>/imap-mcp-server
+cd imap-mcp-server
 ./server_control.sh --env tests/env-ST serve
 ```
 

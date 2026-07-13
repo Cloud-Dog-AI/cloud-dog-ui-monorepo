@@ -37,7 +37,7 @@ import {
   type StatusBadgeTone,
 } from "@cloud-dog/ui";
 import { useAuth } from "@cloud-dog/auth";
-import { useConfig } from "@cloud-dog/config";
+import { useConfig } from "../lib/runtime-config";
 import { useAppState } from "../state/AppState";
 import { isAdminUser } from "../lib/rbac";
 import type { JobRecord } from "../lib/types";

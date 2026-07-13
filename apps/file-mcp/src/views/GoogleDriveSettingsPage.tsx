@@ -54,8 +54,43 @@ function asRecord(value: unknown): Record<string, unknown> {
     : {};
 }
 
+function asStringArray(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+}
+
 function stripTrailingSlash(value: string): string {
   return value.replace(/\/+$/, "");
+}
+
+function hasResolvedValue(value: string): boolean {
+  return value.length > 0 && !value.includes("${");
+}
+
+function googleDriveConfig(profile: AdminProfile): Record<string, unknown> | null {
+  const profileRoot = asRecord(profile.profile);
+  const storage = asRecord(profileRoot.storage);
+  const backend = String(storage.backend ?? "").trim();
+  if (backend !== "google_drive" && backend !== "google-drive") return null;
+  return asRecord(storage.google_drive);
+}
+
+function profileHealthStatus(profile: AdminProfile): string {
+  return String(asRecord(profile.endpoint_health).status ?? "").trim().toLowerCase();
+}
+
+function profileHealthReason(profile: AdminProfile): string {
+  return String(asRecord(profile.endpoint_health).reason ?? profile.reason ?? "").trim();
+}
+
+function profileRequiresGoogleReauthorisation(profile: AdminProfile): boolean {
+  const status = String(profile.status ?? "").trim().toLowerCase();
+  const missing = asStringArray(profile.status_missing).map((item) => item.toLowerCase());
+  const healthStatus = profileHealthStatus(profile);
+  return (
+    healthStatus === "auth_failed" ||
+    missing.includes("google_drive_reauthorisation_required") ||
+    (status.length > 0 && status !== "configured")
+  );
 }
 
 export function GoogleDriveSettingsPage() {
@@ -136,7 +171,7 @@ export function GoogleDriveSettingsPage() {
       setProfiles(loaded);
       const states = backend?.states ?? {};
       const gdBackend = states.google_drive ?? states["google-drive"];
-      setHasGoogleDriveBackend(gdBackend ? gdBackend.status === "healthy" : false);
+      setHasGoogleDriveBackend(Boolean(gdBackend));
       const selected = draft.profile || initialProfile || loaded[0]?.name || "";
       applyProfileDefaults(selected, loaded);
       setStatus("Loaded profile defaults.");
@@ -152,21 +187,30 @@ export function GoogleDriveSettingsPage() {
     void loadProfiles();
   }, [loadProfiles]);
 
-  // A google_drive profile is "connected" when its persisted config has a
-  // resolved (non-template) folder_id AND refresh_token. We compute this from
-  // the loaded profile rather than reacting to URL state, so the form
-  // disappears immediately after page load if OAuth is already complete.
+  const selectedProfile = React.useMemo(
+    () => profiles.find((profile) => profile.name === draft.profile) ?? null,
+    [profiles, draft.profile]
+  );
+
+  const googleDriveAuthIssue = React.useMemo(() => {
+    if (!selectedProfile || !googleDriveConfig(selectedProfile)) return null;
+    if (!profileRequiresGoogleReauthorisation(selectedProfile)) return null;
+    return {
+      status: String(selectedProfile.status ?? "unknown").trim() || "unknown",
+      healthStatus: profileHealthStatus(selectedProfile) || "unknown",
+      reason: profileHealthReason(selectedProfile),
+    };
+  }, [selectedProfile]);
+
+  // A google_drive profile is "connected" only when its persisted config has a
+  // resolved folder_id and refresh_token AND live profile health is not asking
+  // for re-authorisation. Stored tokens alone are not proof of authentication.
   const connectedProfile = React.useMemo(() => {
-    const profile = profiles.find((p) => p.name === draft.profile);
-    if (!profile) return null;
-    const profileRoot = asRecord(profile.profile);
-    const storage = asRecord(profileRoot.storage);
-    const backend = String(storage.backend ?? "").trim();
-    if (backend !== "google_drive" && backend !== "google-drive") return null;
-    const google = asRecord(storage.google_drive);
+    if (!selectedProfile || profileRequiresGoogleReauthorisation(selectedProfile)) return null;
+    const google = googleDriveConfig(selectedProfile);
+    if (!google) return null;
     const folderId = String(google.folder_id ?? "").trim();
     const refreshToken = String(google.refresh_token ?? "").trim();
-    const hasResolvedValue = (v: string) => v.length > 0 && !v.includes("${");
     if (!hasResolvedValue(folderId) || !hasResolvedValue(refreshToken)) return null;
     return {
       userEmail: String(google.user_email ?? "").trim(),
@@ -175,7 +219,7 @@ export function GoogleDriveSettingsPage() {
       clientId: String(google.client_id ?? "").trim(),
       redirectUri: String(google.redirect_uri ?? "").trim(),
     };
-  }, [profiles, draft.profile]);
+  }, [selectedProfile]);
 
   const disconnect = async () => {
     if (!draft.profile) return;
@@ -410,6 +454,29 @@ export function GoogleDriveSettingsPage() {
         </Card>
       ) : null}
 
+      {googleDriveAuthIssue ? (
+        <Card className="border-destructive/40 bg-destructive/5">
+          <CardHeader>
+            <h2 className="text-lg font-semibold text-destructive">
+              Google Drive re-authorisation required
+            </h2>
+            <p className="text-sm text-muted-foreground">
+              Stored Google Drive credentials are present for profile <strong>{draft.profile}</strong>, but live
+              backend health is <code>{googleDriveAuthIssue.healthStatus}</code>. Start OAuth below to replace
+              the expired or revoked token.
+            </p>
+          </CardHeader>
+          <CardContent className="space-y-2 text-sm">
+            <div><span className="text-muted-foreground">Profile status: </span>
+              <code>{googleDriveAuthIssue.status}</code></div>
+            {googleDriveAuthIssue.reason ? (
+              <div><span className="text-muted-foreground">Reason: </span>
+                <code>{googleDriveAuthIssue.reason}</code></div>
+            ) : null}
+          </CardContent>
+        </Card>
+      ) : null}
+
       {connectedProfile ? (
         <Card className="border-green-500/40 bg-green-500/5">
           <CardHeader>
@@ -447,7 +514,7 @@ export function GoogleDriveSettingsPage() {
             ) : null}
             <div className="flex flex-wrap gap-2 pt-3">
               <Button onClick={() => navigate("/file-browser")}>Browse files</Button>
-              <Button variant="secondary" onClick={() => navigate("/mcp-console")}>Open MCP console</Button>
+              <Button variant="secondary" onClick={() => navigate("/developer/mcp-console")}>Open MCP console</Button>
               <Button variant="destructive" onClick={() => void disconnect()} disabled={isLoading}>
                 Disconnect &amp; re-authorise
               </Button>

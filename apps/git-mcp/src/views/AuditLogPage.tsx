@@ -22,6 +22,8 @@ import {
   Input,
   Select,
   StructuredView,
+  parseAuditLinkParams,
+  type AuditFilters,
   type DataColumn,
 } from "@cloud-dog/ui";
 import type { ServerLogRow } from "../lib/types";
@@ -55,6 +57,11 @@ export function AuditLogPage() {
   const [rows, setRows] = React.useState<ServerLogRow[]>([]);
   const [activeType, setActiveType] = React.useState<string>("audit");
   const [query, setQuery] = React.useState("");
+  // W28J-1309: deep-link filters parsed once from the URL (e.g. /audit?workspace_id=ws-1).
+  const [linkFilters, setLinkFilters] = React.useState<AuditFilters>(() =>
+    typeof window === "undefined" ? {} : parseAuditLinkParams(window.location.search),
+  );
+  const linkFilterEntries = Object.entries(linkFilters).filter(([, value]) => Boolean(value));
   const [selectedRow, setSelectedRow] = React.useState<ServerLogRow | null>(null);
   const [error, setError] = React.useState("");
   const [status, setStatus] = React.useState("");
@@ -64,7 +71,7 @@ export function AuditLogPage() {
 
   const load = React.useCallback(async () => {
     try {
-      const items = await api.listServerLogs(apiKey, activeType, 200, query.trim());
+      const items = await api.listServerLogs(apiKey, activeType, 200, query.trim(), linkFilters as Record<string, string>);
       setRows(items);
       setError("");
       setStatus(`Loaded ${items.length} ${sourceLabel(activeType)} entries.`);
@@ -72,7 +79,7 @@ export function AuditLogPage() {
       setError("Failed to load runtime log events.");
       setStatus("");
     }
-  }, [activeType, api, apiKey, query]);
+  }, [activeType, api, apiKey, query, linkFilters]);
 
   React.useEffect(() => {
     void load();
@@ -211,11 +218,23 @@ export function AuditLogPage() {
     },
     {
       id: "actions",
-      header: "Inspect",
+      header: "Actions",
       cell: (row) => (
-        <Button type="button" size="sm" variant="secondary" onClick={() => setSelectedRow(row)}>
-          View
-        </Button>
+        <div className="flex flex-wrap gap-1">
+          <Button type="button" size="sm" variant="secondary" onClick={() => setSelectedRow(row)}>
+            View
+          </Button>
+          {(row.correlationId || row.correlation_id) ? (
+            <Button
+              type="button"
+              size="sm"
+              variant="secondary"
+              onClick={() => setLinkFilters({ correlation_id: row.correlationId || row.correlation_id })}
+            >
+              Filter by correlation
+            </Button>
+          ) : null}
+        </div>
       ),
     },
   ];
@@ -230,6 +249,24 @@ export function AuditLogPage() {
       </header>
 
       {error ? <p role="alert" className="text-sm text-destructive">{error}</p> : null}
+
+      {linkFilterEntries.length ? (
+        <div
+          role="status"
+          aria-label="Active audit filters"
+          className="flex flex-wrap items-center gap-2 rounded-md border border-input bg-muted/40 px-3 py-2 text-sm"
+        >
+          <span className="font-medium text-muted-foreground">Filtered by:</span>
+          {linkFilterEntries.map(([key, value]) => (
+            <span key={key} className="rounded-full bg-primary/10 px-2 py-0.5 font-mono text-xs">
+              {key}={value}
+            </span>
+          ))}
+          <Button type="button" size="sm" variant="secondary" onClick={() => setLinkFilters({})}>
+            Clear filters
+          </Button>
+        </div>
+      ) : null}
 
       <Card>
         <CardHeader className="flex flex-row items-center justify-between">

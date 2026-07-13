@@ -19,6 +19,7 @@ export function injectAccessToken(
   getAccessToken?: () => string | null
 ): void {
   if (!getAccessToken) return;
+  if (headers.has("Authorization")) return;
   const token = getAccessToken();
   if (!token) return;
   headers.set("Authorization", `Bearer ${token}`);

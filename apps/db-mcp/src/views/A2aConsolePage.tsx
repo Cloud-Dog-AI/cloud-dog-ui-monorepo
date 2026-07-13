@@ -133,8 +133,8 @@ export function A2aConsolePage() {
       health={health}
       hasBoundKey={hasBoundKey}
       boundLabel={boundLabel}
-      docsHref="/api-docs"
-      jobsHref="/jobs"
+      docsHref="/developer/api-docs"
+      jobsHref="/system/jobs"
       onSend={onSend}
     />
   );

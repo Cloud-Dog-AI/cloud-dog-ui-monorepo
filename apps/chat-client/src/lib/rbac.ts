@@ -31,6 +31,46 @@ export function isAdminUser(user: User | null | undefined): boolean {
   );
 }
 
+// W28A-727-R5 flat login: three roles — admin / read-write / read-only.
+// `canWrite` is true for admin AND read-write (they may mutate data); only the
+// read-only role is denied. Backed by the shared cloud_dog_idam guard server-side
+// (web_flat_roles.role_can_write + the read-only write-gate → 403-inline), this
+// gates the matching UI affordances so a read-write operator keeps write controls
+// while a read-only visitor sees a view-only UI.
+const _READ_WRITE_ROLE_ALIASES = new Set([
+  "read-write",
+  "read_write",
+  "readwrite",
+  "writer",
+  "editor",
+  "user",
+  "member",
+]);
+
+const _WRITE_PERMISSION_MARKERS = new Set([
+  "*",
+  "chat:message:send",
+  "chat:conversation:delete",
+  "config:write",
+  "profiles:write",
+  "file:write",
+]);
+
+export function canWrite(user: User | null | undefined): boolean {
+  if (!user) return false;
+  if (isAdminUser(user)) return true;
+  const roles = toLowerSet(user.roles);
+  for (const role of roles) {
+    if (_READ_WRITE_ROLE_ALIASES.has(role)) return true;
+  }
+  const permissions = toLowerSet(user.permissions);
+  for (const marker of _WRITE_PERMISSION_MARKERS) {
+    if (permissions.has(marker)) return true;
+  }
+  return false;
+}
+
 export function isReadOnlyUser(user: User | null | undefined): boolean {
-  return !isAdminUser(user);
+  // Truly read-only: not admin AND not read-write (fail-closed for unknown roles).
+  return !canWrite(user);
 }

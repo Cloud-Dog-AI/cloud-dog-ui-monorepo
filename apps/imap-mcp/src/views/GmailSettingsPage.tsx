@@ -66,18 +66,33 @@ export function GmailSettingsPage() {
   const [loading, setLoading] = React.useState(true);
   const [error, setError] = React.useState<string | null>(null);
   const [startingOAuth, setStartingOAuth] = React.useState(false);
+  // W28E-1853: the optional gmail-setup admin capability is not registered on
+  // every backend; a 404 status probe must render a role-correct "not enabled"
+  // state, never a raw HTTP error banner (PS-WEBUI-URL-CANONICAL §2).
+  const [setupUnavailable, setSetupUnavailable] = React.useState(false);
+
+  // IMAP-540: profile selector — operator chooses which Gmail profile to manage.
+  const [selectedProfile, setSelectedProfile] = React.useState<string>(callbackProfile || "gmail_personal");
 
   const loadStatus = React.useCallback(async () => {
     setLoading(true);
     setError(null);
+    setSetupUnavailable(false);
     try {
-      // gmail-setup routes are mounted on the web server (same origin as the SPA),
-      // not the API server, so use a relative URL to avoid hitting the API base.
-      const response = await fetch(`/admin/gmail-setup/status`, {
+      // IMAP-542: pass ?profile=<id> so backend returns per-profile state.
+      const response = await fetch(`/admin/gmail-setup/status?profile=${encodeURIComponent(selectedProfile)}`, {
         method: "GET",
         headers: { Accept: "application/json" },
         credentials: "include",
       });
+      if (response.status === 404) {
+        // The optional gmail-setup admin capability is not registered on this
+        // deployment. Render a non-leaking, role-correct "not enabled" state
+        // (PS-WEBUI-URL-CANONICAL §2) instead of surfacing a raw HTTP 404 error.
+        setStatus(null);
+        setSetupUnavailable(true);
+        return;
+      }
       if (!response.ok) {
         throw new Error(`HTTP ${response.status} from /admin/gmail-setup/status`);
       }
@@ -91,7 +106,7 @@ export function GmailSettingsPage() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [selectedProfile]);
 
   React.useEffect(() => {
     void loadStatus();
@@ -99,7 +114,14 @@ export function GmailSettingsPage() {
 
   const isConnected = Boolean(status?.has_refresh_token);
   const accountEmail = status?.connected_account_email || callbackAccount;
-  const profile = (status?.profiles?.[0] ?? callbackProfile) || "gmail_personal";
+  // IMAP-540: profile drives status fetch; status.profiles is the union of known Gmail profiles.
+  const profile = selectedProfile;
+  const availableProfiles = React.useMemo(() => {
+    const set = new Set<string>(status?.profiles ?? []);
+    set.add(selectedProfile);
+    if (callbackProfile) set.add(callbackProfile);
+    return Array.from(set).sort();
+  }, [status?.profiles, selectedProfile, callbackProfile]);
 
   // Gmail-specific defaults rendered in the setup-steps card so the operator
   // can copy them into the OAuth client configuration.
@@ -138,8 +160,30 @@ export function GmailSettingsPage() {
 
   return (
     <div className="space-y-6">
-      <header className="flex items-center gap-3">
+      <header className="flex flex-wrap items-center gap-3">
         <h1 className="text-2xl font-semibold">Gmail Settings</h1>
+        {/* IMAP-540 / IMAP-541: profile selector — multiple Gmail accounts supported.
+            Operator can switch between gmail_personal, gmail_work, etc.;
+            new profile names can be typed via the "new profile" option. */}
+        <div className="flex items-center gap-2">
+          <label htmlFor="gmail-profile-select" className="text-sm text-muted-foreground">Profile:</label>
+          <select
+            id="gmail-profile-select"
+            className="rounded-md border bg-background px-2 py-1 text-sm font-mono"
+            value={selectedProfile}
+            onChange={(e) => {
+              if (e.target.value === "__new__") {
+                const next = window.prompt("New Gmail profile name (e.g. gmail_work):", "gmail_work");
+                if (next && next.trim()) setSelectedProfile(next.trim());
+                return;
+              }
+              setSelectedProfile(e.target.value);
+            }}
+          >
+            {availableProfiles.map((p) => <option key={p} value={p}>{p}</option>)}
+            <option value="__new__">+ new Gmail profile…</option>
+          </select>
+        </div>
         <Button variant="secondary" size="sm" onClick={() => void loadStatus()} disabled={loading}>
           Refresh status
         </Button>
@@ -208,7 +252,18 @@ export function GmailSettingsPage() {
         </p>
       ) : null}
 
-      {isConnected ? (
+      {setupUnavailable ? (
+        <Card className="border-input bg-muted/30">
+          <CardHeader>
+            <h2 className="text-lg font-semibold">Gmail self-service setup not enabled</h2>
+            <p className="text-sm text-muted-foreground">
+              The Gmail OAuth self-service setup capability is not enabled on this
+              deployment. Existing Gmail/IMAP profiles continue to work through the
+              Channels page, MCP tools, A2A skills, and the Mailbox Workspace.
+            </p>
+          </CardHeader>
+        </Card>
+      ) : isConnected ? (
         <Card className="border-green-500/40 bg-green-500/5">
           <CardHeader>
             <h2 className="text-lg font-semibold text-green-700 dark:text-green-400">

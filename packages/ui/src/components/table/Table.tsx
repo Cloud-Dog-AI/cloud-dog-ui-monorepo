@@ -18,8 +18,9 @@ import * as React from "react";
 import { cn } from "../../utils/cn";
 
 export function Table(props: React.TableHTMLAttributes<HTMLTableElement>) {
+  const scrollLabel = typeof props["aria-label"] === "string" ? `${props["aria-label"]} table scroll area` : "Table scroll area";
   return (
-    <div className="w-full overflow-auto">
+    <div className="w-full overflow-auto" role="region" aria-label={scrollLabel} tabIndex={0}>
       <table {...props} className={cn("w-full text-sm", props.className)} />
     </div>
   );

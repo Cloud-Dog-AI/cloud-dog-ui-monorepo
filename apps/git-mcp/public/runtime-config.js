@@ -19,5 +19,5 @@ window.__RUNTIME_CONFIG__ = {
   A2A_BASE_URL: `${window.location.origin}/git-a2a/a2a`,
   AUTH_MODE: "api_key",
   DEFAULT_PROFILE: "remote_cloud_dog",
-  REMOTE_REPO_URL: "https://example.com/org/example-project.git"
+  REMOTE_REPO_URL: "https://git.example.com/your-org/your-repo.git"
 };

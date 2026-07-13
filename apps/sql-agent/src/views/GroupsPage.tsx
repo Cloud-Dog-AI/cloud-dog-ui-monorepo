@@ -289,13 +289,21 @@ export function GroupsPage() {
       cell: (row) => (
         <div className="flex flex-wrap gap-2">
           <Button
+            id={`group-edit-${row.id}`}
             variant="secondary"
             onClick={() => beginEdit(row)}
           >
             Edit
           </Button>
           {row.name !== 'default' ? (
-            <Button variant="ghost" className="!transition-none" onClick={() => void deleteGroup(row)}>Delete</Button>
+            <Button
+              id={`group-delete-${row.id}`}
+              variant="ghost"
+              className="!transition-none"
+              onClick={() => void deleteGroup(row)}
+            >
+              Delete
+            </Button>
           ) : null}
         </div>
       ),
@@ -330,6 +338,7 @@ export function GroupsPage() {
               <div className="flex flex-wrap gap-2">
                 <Button
                   id="group-open-create-btn"
+                  disabled={users.loading}
                   onClick={() => {
                     setForm(EMPTY_GROUP_FORM);
                     setEditingGroupId(null);

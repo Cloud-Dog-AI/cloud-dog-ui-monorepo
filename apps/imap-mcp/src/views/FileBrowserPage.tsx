@@ -23,8 +23,11 @@ import {
   CardHeader,
   Checkbox,
   CodeViewer,
+  ConfirmDialog,
   DataTable,
   DocumentViewer,
+  FileBrowser,
+  FileDropZone,
   FolderTree,
   Input,
   JsonExplorer,
@@ -35,7 +38,9 @@ import {
   TabsContent,
   TabsList,
   TabsTrigger,
+  formatBytes,
   type DataColumn,
+  type FileItem,
   type FolderNode,
   type MessageBulkAction,
   type MessageItem,
@@ -49,6 +54,10 @@ type MutationGateState = Readonly<{
   allowMoveMessages: boolean;
   allowDeleteMessages: boolean;
 }>;
+
+type PendingMailboxConfirmation =
+  | Readonly<{ kind: "delete-messages"; ids: string[]; folder: string }>
+  | Readonly<{ kind: "move-duplicates"; folder: string; destinationFolder: string }>;
 
 type WorkspaceMessageRow = Readonly<{
   uid: string;
@@ -87,6 +96,16 @@ type ProfileOption = Readonly<{
 
 const MUTATION_GATE_STORAGE_KEY = "imap-mcp.mutation-gates";
 const DEFAULT_FOLDERS = ["INBOX", "Archive", "Sent", "Trash"];
+
+function downloadJson(filename: string, value: unknown): void {
+  const blob = new Blob([JSON.stringify(value, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
 const DEFAULT_FOLDER_ROWS: MailboxFolderRow[] = DEFAULT_FOLDERS.map((name) => ({
   name,
   delimiter: "/",
@@ -310,6 +329,7 @@ export function MailboxWorkspacePage() {
   const [loadingMessages, setLoadingMessages] = React.useState(false);
   const [loadingSelection, setLoadingSelection] = React.useState(false);
   const [downloadingAttachmentPartId, setDownloadingAttachmentPartId] = React.useState("");
+  const [pendingConfirmation, setPendingConfirmation] = React.useState<PendingMailboxConfirmation | null>(null);
 
   const selectedProfile = React.useMemo(
     () => profiles.find((item) => item.profileId === selectedProfileId) ?? null,
@@ -383,6 +403,31 @@ export function MailboxWorkspacePage() {
       },
     ],
     [downloadAttachment, downloadingAttachmentPartId],
+  );
+
+  const attachmentPath = React.useCallback(
+    (row: AttachmentRow) => `/attachments/${selectedMessageId}/${row.partId || row.filename}`,
+    [selectedMessageId],
+  );
+  const attachmentByPath = React.useMemo(
+    () => new Map(attachments.map((row) => [attachmentPath(row), row])),
+    [attachmentPath, attachments],
+  );
+  const attachmentBrowserFiles = React.useMemo<FileItem[]>(
+    () => attachments.map((row) => ({
+      name: row.filename || row.partId || "attachment",
+      path: attachmentPath(row),
+      size: row.size || undefined,
+      contentType: row.contentType || undefined,
+      status: row.partId || undefined,
+      kind: "artifact",
+      testId: `imap-attachment-${row.partId || row.filename || "unknown"}`,
+    })),
+    [attachmentPath, attachments],
+  );
+  const attachmentBrowserFolders = React.useMemo<FolderNode[]>(
+    () => [{ name: "Attachments", path: "/attachments", children: [] }],
+    [],
   );
 
   const setGate = React.useCallback((key: keyof MutationGateState, value: boolean) => {
@@ -604,12 +649,23 @@ export function MailboxWorkspacePage() {
           setError("Delete Messages is blocked by the local mutation gate.");
           return;
         }
-        if (!window.confirm(`Delete ${ids.length} message(s) from ${selectedFolder}?`)) {
-          return;
-        }
+        setPendingConfirmation({ kind: "delete-messages", ids, folder: selectedFolder });
+        return;
+      }
+
+      await loadMessages(selectedProfileId, selectedFolder, query);
+    },
+    [api, destinationFolder, gates.allowDeleteMessages, gates.allowMoveMessages, gates.allowSetSeen, loadMessages, query, selectedFolder, selectedProfileId],
+  );
+
+  const deleteMessagesNow = React.useCallback(
+    async (ids: string[], folder: string) => {
+      if (!selectedProfileId || ids.length === 0) return;
+      setError("");
+      try {
         const result = await api.callTool<Record<string, unknown>>("mail_delete_messages", {
           profile_id: selectedProfileId,
-          folder: selectedFolder,
+          folder,
           uids: ids,
           async_mode: true,
         });
@@ -619,11 +675,12 @@ export function MailboxWorkspacePage() {
             ? `Queued delete job ${deleteJobId} — see /jobs for progress`
             : formatMutationResult(result.meta.status, result.errorCode, result.errorMessage || "ok", result.meta.requestId, result.meta.correlationId),
         );
+        await loadMessages(selectedProfileId, folder, query);
+      } catch (deleteError) {
+        setError(deleteError instanceof Error ? deleteError.message : "Delete messages failed.");
       }
-
-      await loadMessages(selectedProfileId, selectedFolder, query);
     },
-    [api, destinationFolder, gates.allowDeleteMessages, gates.allowMoveMessages, gates.allowSetSeen, loadMessages, query, selectedFolder, selectedProfileId],
+    [api, loadMessages, query, selectedProfileId],
   );
 
   const runMoveDuplicates = React.useCallback(async () => {
@@ -634,20 +691,31 @@ export function MailboxWorkspacePage() {
       setError("Move Duplicates is blocked by the local mutation gate.");
       return;
     }
-    if (!window.confirm(`Move duplicates from ${selectedFolder} to ${destinationFolder.trim() || "Archive"}?`)) {
-      return;
-    }
+    setPendingConfirmation({
+      kind: "move-duplicates",
+      folder: selectedFolder,
+      destinationFolder: destinationFolder.trim() || "Archive",
+    });
+  }, [destinationFolder, gates.allowMoveDuplicates, selectedFolder, selectedProfileId]);
+
+  const moveDuplicatesNow = React.useCallback(async (folder: string, destination: string) => {
+    if (!selectedProfileId) return;
+    setError("");
+    try {
     const result = await api.callTool<Record<string, unknown>>("mail_move_duplicates_since_last_search", {
       profile_id: selectedProfileId,
       query: query.trim() || "ALL",
-      destination_folder: destinationFolder.trim() || "Archive",
+      destination_folder: destination,
       strategy: "heuristic",
       policy: "newest",
       dry_run: false,
     });
     setStatus(formatMutationResult(result.meta.status, result.errorCode, result.errorMessage || "ok", result.meta.requestId, result.meta.correlationId));
-    await loadMessages(selectedProfileId, selectedFolder, query);
-  }, [api, destinationFolder, gates.allowMoveDuplicates, loadMessages, query, selectedFolder, selectedProfileId]);
+      await loadMessages(selectedProfileId, folder, query);
+    } catch (moveError) {
+      setError(moveError instanceof Error ? moveError.message : "Move duplicates failed.");
+    }
+  }, [api, loadMessages, query, selectedProfileId]);
 
   React.useEffect(() => {
     void loadProfiles();
@@ -703,7 +771,7 @@ export function MailboxWorkspacePage() {
         </div>
         <p className="text-sm text-muted-foreground">
           Folder-tree-driven browsing with per-message mutations (set seen, move, delete, duplicate sweep).
-          For targeted search + attachment retrieval see <a href="/search-retrieve" className="text-primary underline-offset-4 hover:underline">Mailbox</a>.
+          For targeted search + attachment retrieval see <a href="/search-retrieve" className="text-primary underline underline-offset-4">Mailbox</a>.
         </p>
       </header>
 
@@ -777,51 +845,45 @@ export function MailboxWorkspacePage() {
           </CardContent>
         </Card>
 
-        <div className="grid gap-6 xl:grid-cols-[18rem_minmax(0,1fr)_28rem]">
-          <div className="space-y-6">
+        {/* IMAP-340: redesigned layout — search top, folders left, message list 75% right; viewer panel at bottom. */}
+        <div className="grid gap-6 xl:grid-cols-[18rem_minmax(0,1fr)]">
+          <Card>
+            <CardHeader>
+              <h2 className="text-lg font-semibold">Folders</h2>
+            </CardHeader>
+            <CardContent>
+              {/* IMAP-342: folder tree (FolderTree already renders nested hierarchy). */}
+              <FolderTree
+                folders={folderNodes}
+                selectedPath={selectedFolder}
+                onSelect={(path) => setSelectedFolder(path)}
+                className="max-h-[40rem]"
+              />
+            </CardContent>
+          </Card>
 
-            <Card>
-              <CardHeader>
-                <h2 className="text-lg font-semibold">Folders</h2>
-              </CardHeader>
-              <CardContent>
-                <FolderTree
-                  folders={folderNodes}
-                  selectedPath={selectedFolder}
-                  onSelect={(path) => setSelectedFolder(path)}
-                  className="max-h-[28rem]"
-                />
-              </CardContent>
-            </Card>
+          <Card>
+            <CardHeader>
+              <div className="flex flex-wrap items-center gap-2">
+                <h2 className="text-lg font-semibold">Message List</h2>
+                <Badge variant="secondary">{selectedFolder}</Badge>
+                <Badge variant="secondary">{selectedProfileId}</Badge>
+              </div>
+            </CardHeader>
+            <CardContent className="p-0">
+              <MessageList
+                messages={messages.map((row) => toMessageItem(row))}
+                selectedId={selectedMessageId}
+                onSelect={setSelectedMessageId}
+                onBulkAction={(action, ids) => void runBulkAction(action, ids)}
+                loading={loadingMessages}
+              />
+            </CardContent>
+          </Card>
+        </div>
 
-            {/* IMAP-064: Mutation Gates panel removed. Mutation buttons in
-                the message viewer's Mutations tab still respect the gate
-                values, which default to allowed; per-mutation confirm
-                dialogs already prevent accidental destructive actions. */}
-          </div>
-
-          <div className="space-y-6">
-            <Card>
-              <CardHeader>
-                <div className="flex flex-wrap items-center gap-2">
-                  <h2 className="text-lg font-semibold">Message List</h2>
-                  <Badge variant="secondary">{selectedFolder}</Badge>
-                  <Badge variant="secondary">{selectedProfileId}</Badge>
-                </div>
-              </CardHeader>
-              <CardContent className="p-0">
-                <MessageList
-                  messages={messages.map((row) => toMessageItem(row))}
-                  selectedId={selectedMessageId}
-                  onSelect={setSelectedMessageId}
-                  onBulkAction={(action, ids) => void runBulkAction(action, ids)}
-                  loading={loadingMessages}
-                />
-              </CardContent>
-            </Card>
-          </div>
-
-          <div className="space-y-6">
+        {/* IMAP-340: Message Viewer at the bottom as a full-width panel. */}
+        <div>
             <Card>
               <CardHeader>
                 <div className="flex flex-wrap items-center gap-2">
@@ -842,13 +904,37 @@ export function MailboxWorkspacePage() {
                     </TabsList>
 
                     <TabsContent value="summary">
-                      <div className="space-y-4">
-                        <JsonExplorer
-                          title="Selected Message"
-                          data={selectedMessage.raw}
-                          defaultExpanded
-                          maxDepth={6}
-                        />
+                      {/* IMAP-343: structured summary — message metadata in a form, not a JSON dump. */}
+                      <div className="space-y-3">
+                        <section className="rounded-md border bg-background p-3">
+                          <h4 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-2">Headers</h4>
+                          <div className="grid gap-2 md:grid-cols-2 text-sm">
+                            <div><span className="text-muted-foreground">UID:</span> <span className="font-mono">{selectedMessage.uid}</span></div>
+                            <div><span className="text-muted-foreground">Subject:</span> {String((selectedMessage.raw as Record<string, unknown>)?.subject ?? "—")}</div>
+                            <div><span className="text-muted-foreground">From:</span> {String((selectedMessage.raw as Record<string, unknown>)?.from ?? "—")}</div>
+                            <div><span className="text-muted-foreground">To:</span> {String((selectedMessage.raw as Record<string, unknown>)?.to ?? "—")}</div>
+                            <div><span className="text-muted-foreground">Date:</span> {String((selectedMessage.raw as Record<string, unknown>)?.date_utc ?? "—")}</div>
+                            <div><span className="text-muted-foreground">Folder:</span> <span className="font-mono">{selectedFolder}</span></div>
+                          </div>
+                        </section>
+                        <section className="rounded-md border bg-background p-3">
+                          <h4 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-2">Message info</h4>
+                          <div className="grid gap-2 md:grid-cols-3 text-sm">
+                            <div><span className="text-muted-foreground">Size:</span> <span className="font-mono">{(() => {
+                              const sz = (selectedMessage.raw as Record<string, unknown>)?.size_bytes;
+                              return typeof sz === "number" ? formatBytes(sz) : "—";
+                            })()}</span></div>
+                            <div><span className="text-muted-foreground">Format:</span> {String((selectedMessage.raw as Record<string, unknown>)?.content_type ?? "—")}</div>
+                            <div><span className="text-muted-foreground">Attachments:</span> {attachments.length}</div>
+                            <div><span className="text-muted-foreground">Header-Message-ID:</span> <span className="font-mono text-xs break-all">{String((selectedMessage.raw as Record<string, unknown>)?.header_message_id ?? "—")}</span></div>
+                          </div>
+                        </section>
+                        <details className="rounded-md border bg-muted/20 p-2">
+                          <summary className="cursor-pointer text-xs text-muted-foreground">Show raw message JSON (advanced)</summary>
+                          <div className="mt-2">
+                            <JsonExplorer data={selectedMessage.raw} viewMode="table" maxDepth={6} hideInternalSearch />
+                          </div>
+                        </details>
                       </div>
                     </TabsContent>
 
@@ -895,12 +981,48 @@ export function MailboxWorkspacePage() {
 
                     <TabsContent value="attachments">
                       <div className="space-y-4">
+                        <FileDropZone
+                          disabled
+                          label="Upload attachment"
+                          disabledDescription="IMAP attachments are read from selected mailbox messages and cannot be uploaded from this page."
+                          onDrop={() => undefined}
+                          testId="imap-attachments-disabled-drop-zone"
+                        />
+                        <FileBrowser
+                          folders={attachmentBrowserFolders}
+                          files={attachmentBrowserFiles}
+                          currentPath="/attachments"
+                          rootLabel="message"
+                          filesLabel="Message attachments"
+                          loading={loadingSelection}
+                          errorMessage={error || null}
+                          statusMessage={`${attachments.length} attachments`}
+                          emptyMessage="No attachments listed for the selected message."
+                          readOnly
+                          onNavigate={() => undefined}
+                          onDownload={(path) => {
+                            const row = attachmentByPath.get(path);
+                            if (row) void downloadAttachment(row);
+                          }}
+                          testId="imap-attachments-file-browser"
+                        />
                         <DataTable
                           tableId="imap-mailbox-workspace-attachments"
                           columns={attachmentColumns}
                           rows={attachments}
                           getRowId={(row) => row.partId || row.filename}
                           emptyMessage="No attachments listed for the selected message."
+                          columnPickerEnabled
+                          selectable
+                          bulkActions={[{ label: "Export", action: "export" }]}
+                          onBulkAction={(action, ids) => {
+                            if (action === "export") {
+                              downloadJson(
+                                "imap-workspace-attachments.json",
+                                attachments.filter((row) => ids.includes(row.partId || row.filename)).map((row) => row.raw),
+                              );
+                            }
+                          }}
                         />
                       </div>
                     </TabsContent>
@@ -948,25 +1070,38 @@ export function MailboxWorkspacePage() {
               </CardContent>
             </Card>
 
-            {/* IMAP-063: Channel-configuration sub-form removed (duplicated
-                /profiles). Replaced with a button that takes the operator
-                straight to the Channels page with this channel pre-selected. */}
-            {selectedProfile ? (
-              <div className="rounded-md border bg-muted/30 p-3 text-sm">
-                <div className="mb-2 text-muted-foreground">
-                  Channel <span className="font-mono">{selectedProfile.profileId}</span> configuration is managed on the Channels page.
-                </div>
-                <a
-                  href={`/profiles?channelId=${encodeURIComponent(selectedProfile.profileId)}`}
-                  className="inline-flex items-center rounded-md border bg-background px-3 py-1 text-sm font-medium hover:bg-accent"
-                >
-                  Configure this channel →
-                </a>
-              </div>
-            ) : null}
-          </div>
+            {/* IMAP-344: "Manage channel" link belongs at the top of the page, not
+                here. Keep nothing in the bottom viewer panel except the viewer itself. */}
         </div>
       </>)}
+      <ConfirmDialog
+        open={pendingConfirmation !== null}
+        onOpenChange={(open) => {
+          if (!open) setPendingConfirmation(null);
+        }}
+        title={pendingConfirmation?.kind === "move-duplicates" ? "Move duplicate messages" : "Delete messages"}
+        description={
+          pendingConfirmation?.kind === "move-duplicates"
+            ? "Move duplicate messages from the selected mailbox folder."
+            : "Delete the selected mailbox messages from the current folder."
+        }
+        targetName={
+          pendingConfirmation?.kind === "move-duplicates"
+            ? `${pendingConfirmation.folder} -> ${pendingConfirmation.destinationFolder}`
+            : `${pendingConfirmation?.ids.length ?? 0} message(s) from ${pendingConfirmation?.folder ?? selectedFolder}`
+        }
+        confirmLabel={pendingConfirmation?.kind === "move-duplicates" ? "Move duplicates" : "Delete messages"}
+        onConfirm={() => {
+          const pending = pendingConfirmation;
+          setPendingConfirmation(null);
+          if (!pending) return;
+          if (pending.kind === "move-duplicates") {
+            void moveDuplicatesNow(pending.folder, pending.destinationFolder);
+          } else {
+            void deleteMessagesNow(pending.ids, pending.folder);
+          }
+        }}
+      />
     </div>
   );
 }
@@ -974,8 +1109,3 @@ export function MailboxWorkspacePage() {
 function splitUids(value: string): string[] {
   return value.split(",").map((item) => item.trim()).filter((item) => item.length > 0);
 }
-
-function confirmDestructive(action: string, scope: string): boolean {
-  return window.confirm(`Confirm ${action}?\n\nAffected scope:\n${scope}`);
-}
-

@@ -24,6 +24,9 @@
       "@cloud-dog/auth": [
         "packages/auth/src/index.ts"
       ],
+      "@cloud-dog/idam": [
+        "packages/idam/src/index.tsx"
+      ],
       "@cloud-dog/api-client": [
         "packages/api-client/src/index.ts"
       ],

@@ -32,6 +32,8 @@ export type ProfileRecord = Readonly<{
   name: string;
   source: string;
   defaultBranch: string;
+  // GM-PR-02: surface the configured credential mode in the profile View dialog.
+  credentialMode?: string;
 }>;
 
 export type UserRecord = Readonly<{

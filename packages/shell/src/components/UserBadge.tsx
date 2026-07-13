@@ -22,6 +22,7 @@ import type { UserMenuConfig } from "../types/nav.js";
 export interface UserBadgeProps {
   config?: UserMenuConfig;
   className?: string;
+  testIdPrefix?: string;
 }
 
 export function UserBadge(props: UserBadgeProps) {
@@ -71,14 +72,16 @@ export function UserBadge(props: UserBadgeProps) {
   }
 
   const fallback = (displayName || "U").slice(0, 1).toUpperCase();
+  const testIdPrefix = props.testIdPrefix ?? "cloud-dog-shell";
 
   return (
     <DropdownMenu
       trigger={
         <Button
           variant="ghost"
-          aria-label="User menu"
+          aria-label="Account menu"
           className={cn("h-auto min-w-0 gap-2 px-2 py-1", props.className)}
+          data-testid={`${testIdPrefix}-user-menu-trigger`}
         >
           <Avatar alt={displayName || "User"} src={avatarUrl} fallback={fallback} />
           <span className="hidden max-w-40 truncate text-sm font-medium sm:inline">

@@ -14,30 +14,8 @@
 
 // @cloud-dog/ui — Relative time formatting utility.
 
-const SECOND = 1000;
-const MINUTE = 60 * SECOND;
-const HOUR = 60 * MINUTE;
-const DAY = 24 * HOUR;
-const WEEK = 7 * DAY;
+import { formatRelativeTime } from "../../utils/formatRelativeTime";
 
 export function formatRelative(date: Date): string {
-  const now = Date.now();
-  const diff = now - date.getTime();
-
-  if (diff < 10 * SECOND) return "just now";
-  if (diff < MINUTE) return `${Math.floor(diff / SECOND)} seconds ago`;
-  if (diff < HOUR) {
-    const m = Math.floor(diff / MINUTE);
-    return `${m} ${m === 1 ? "minute" : "minutes"} ago`;
-  }
-  if (diff < DAY) {
-    const h = Math.floor(diff / HOUR);
-    return `${h} ${h === 1 ? "hour" : "hours"} ago`;
-  }
-  if (diff < WEEK) {
-    const d = Math.floor(diff / DAY);
-    return `${d} ${d === 1 ? "day" : "days"} ago`;
-  }
-  const w = Math.floor(diff / WEEK);
-  return `${w} ${w === 1 ? "week" : "weeks"} ago`;
+  return formatRelativeTime(date);
 }

@@ -16,7 +16,7 @@
 // Covers: UI-R11, UI-R25, W28A-644, W28A-312
 
 import * as React from 'react';
-import { ResourceMetrics, type MetricItem } from '@cloud-dog/ui';
+import { ResourceMetrics, formatSeconds, type MetricItem } from '@cloud-dog/ui';
 import { useNotificationAgentState } from '../state/AppState';
 import { LogTablePanel } from './LogTablePanel';
 
@@ -26,17 +26,11 @@ function asMetricValue(value: number | string | null | undefined): string {
 }
 
 function formatUptimeHuman(seconds: number | string | null | undefined): string {
+  // CX-170: delegate to the shared @cloud-dog/ui formatSeconds helper — no bespoke duration strings.
   if (seconds === null || seconds === undefined || seconds === '') return 'N/A';
   const numeric = typeof seconds === 'number' ? seconds : Number(seconds);
-  if (!Number.isFinite(numeric) || numeric < 0) return String(seconds);
-  const days = Math.floor(numeric / 86400);
-  const hours = Math.floor((numeric % 86400) / 3600);
-  const minutes = Math.floor((numeric % 3600) / 60);
-  const secs = Math.floor(numeric % 60);
-  if (days > 0) return `${days}d ${hours}h ${minutes}m`;
-  if (hours > 0) return `${hours}h ${minutes}m`;
-  if (minutes > 0) return `${minutes}m ${secs}s`;
-  return `${secs}s`;
+  if (!Number.isFinite(numeric) || numeric < 0) return 'N/A';
+  return formatSeconds(numeric);
 }
 
 function readLogFilterFromLocation(): string {
@@ -66,7 +60,6 @@ export function MonitoringPage() {
         { label: 'CPU', value: asMetricValue(status.cpu_percent), unit: '%' },
         { label: 'Disk', value: asMetricValue(status.disk_percent), unit: '%' },
         { label: 'Connections', value: asMetricValue(status.active_connections) },
-        { label: 'Queue depth', value: asMetricValue(status.queue_depth) },
         { label: 'Delivery rate', value: asMetricValue(status.delivery_success_rate), unit: '%' },
         { label: 'Retry queue', value: asMetricValue(status.retry_queue_size) },
       ]);
@@ -95,7 +88,9 @@ export function MonitoringPage() {
   return (
     <div className="space-y-6">
       <header className="space-y-2">
-        <h1 className="text-2xl font-semibold">Monitoring</h1>
+        {/* NA-AL-01: page title renamed from "Monitoring" to "Audit & Log" to
+            match nav label and peer WebUIs (chat-client, expert-agent). */}
+        <h1 className="text-2xl font-semibold">Audit &amp; Log</h1>
         <p className="text-sm text-muted-foreground">Audit and application log viewer with resource metrics.</p>
       </header>
 

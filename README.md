@@ -10,7 +10,7 @@ Shared Cloud-Dog UI platform monorepo for reusable frontend packages and deploya
 
 ## Repository layout
 - `apps/*`: independently buildable/deployable service UIs (never published as shared code)
-- `packages/*`: reusable `@cloud-dog/*` libraries published through the Gitea package registry
+- `packages/*`: reusable `@cloud-dog/*` libraries with registry-neutral package metadata
 - `docs/*`: architecture/UX/testing guidance
 - `working/*`: active planning artefacts
 
@@ -32,9 +32,9 @@ nvm use
 npm install
 ```
 
-## Internal registry
-`@cloud-dog/*` scope is configured to resolve/publish through:
-- `https://registry.npmjs.org/` (see `.npmrc`)
+## Package registry
+Configure the approved package registry in the release environment. Package
+manifests deliberately contain no environment-specific registry or topology.
 
 Apps in `apps/*` remain private and are deployed as application artefacts, not shared libraries.
 
@@ -60,9 +60,9 @@ See `working/DELIVERY-PLAN.md` for the staged plan to make this repo release-rea
 - `.github/workflows/ci-validate.yml`: build/typecheck/lint/test
 - `.github/workflows/ci-e2e-a11y.yml`: Playwright E2E and axe checks
 - `.github/workflows/standards-compliance.yml`: local baseline and boundary checks
-- `.github/workflows/publish-packages.yml`: publishes `packages/*` to the configured Gitea package registry on tag or manual dispatch
+- `.github/workflows/publish-packages.yml`: publishes `packages/*` to the release-selected registry on tag or manual dispatch
 
-For publishing, configure repository secret `NPM_TOKEN` with publish access to the configured package registry.
+For publishing, configure `NPM_TOKEN` with access to the release-selected registry.
 
 ## Licence
 

@@ -8,12 +8,12 @@ import { useAuth } from "@cloud-dog/auth";
 import { Card, CardContent, CardHeader, FileBrowser, FileDropZone, Select, Spinner } from "@cloud-dog/ui";
 import type { FileItem } from "@cloud-dog/ui";
 import type { FolderNode } from "@cloud-dog/ui";
-import { useConfig } from "@cloud-dog/config";
+import { useConfig } from "../lib/runtime-config";
 import { isReadOnlyUser } from "../lib/rbac";
 import { useAppState } from "../state/AppState";
 
 type McpServer = { index: number; name: string };
-type RuntimeConfig = { MCP_BASE_URL: string; API_KEY_HEADER?: string };
+type RuntimeConfig = { MCP_BASE_URL: string };
 
 export function FileBrowserPage() {
   const auth = useAuth();
@@ -34,7 +34,7 @@ export function FileBrowserPage() {
   const callTool = React.useCallback(async (name: string, args: Record<string, unknown>) => {
     if (serverIndex === null || !activeSessionId) return null;
     const headers: Record<string, string> = { "Content-Type": "application/json" };
-    if (apiKey.trim()) headers[apiKeyHeader || cfg.API_KEY_HEADER || "X-API-Key"] = apiKey.trim();
+    if (apiKey.trim()) headers[apiKeyHeader || "X-API-Key"] = apiKey.trim();
     if (selectedProfile.trim()) headers["X-File-MCP-Profile"] = selectedProfile.trim();
     const resp = await fetch(`/sessions/${activeSessionId}/mcp/tools/call`, {
       method: "POST", credentials: "include", headers,
@@ -42,14 +42,14 @@ export function FileBrowserPage() {
     });
     const data = await resp.json();
     return data?.result ?? data;
-  }, [serverIndex, activeSessionId, apiKey, apiKeyHeader, cfg.API_KEY_HEADER]);
+  }, [serverIndex, activeSessionId, apiKey, apiKeyHeader]);
 
   // Find the configured file service index.
   React.useEffect(() => {
     (async () => {
       try {
         const headers: Record<string, string> = {};
-        if (apiKey.trim()) headers[apiKeyHeader || cfg.API_KEY_HEADER || "X-API-Key"] = apiKey.trim();
+        if (apiKey.trim()) headers[apiKeyHeader || "X-API-Key"] = apiKey.trim();
         const resp = await fetch("/mcp/servers", { credentials: "include", headers });
         const data = await resp.json();
         const srvs = (data?.servers ?? []).filter(
@@ -59,7 +59,7 @@ export function FileBrowserPage() {
         if (srvs.length > 0) setServerIndex(srvs[0].index);
       } catch {}
     })();
-  }, [apiKey, apiKeyHeader, cfg.API_KEY_HEADER]);
+  }, [apiKey, apiKeyHeader]);
 
   // Load file storage profiles via the chat-client backend proxy.
   React.useEffect(() => {
@@ -159,9 +159,9 @@ export function FileBrowserPage() {
   if (serverIndex === null) {
     return (
       <Card>
-        <CardHeader><h1 className="text-xl font-semibold">File Browser</h1></CardHeader>
+        <CardHeader><h1 className="text-xl font-semibold">Catalogue</h1></CardHeader>
         <CardContent>
-          <p className="text-muted-foreground">No file service connected. Add a file-service backend in External Services settings.</p>
+          <p className="text-muted-foreground">No file catalogue service connected. Add a file-service backend in External Services settings.</p>
         </CardContent>
       </Card>
     );
@@ -172,7 +172,7 @@ export function FileBrowserPage() {
       <Card>
         <CardHeader>
           <div className="flex items-center justify-between">
-            <h1 className="text-xl font-semibold">File Browser</h1>
+            <h1 className="text-xl font-semibold">Catalogue</h1>
             <div className="flex items-center gap-2">
               {profiles.length > 0 && (
                 <Select
@@ -197,19 +197,19 @@ export function FileBrowserPage() {
               folders={folders}
               files={files}
               currentPath={currentPath}
+              loading={loading}
+              errorMessage={error}
+              readOnly={readOnly}
               onNavigate={loadDir}
-              onUpload={() => {
-                if (readOnly) return;
-                const input = document.createElement("input");
-                input.type = "file";
-                input.multiple = true;
-                input.onchange = () => {
-                  if (input.files) handleUpload(Array.from(input.files));
-                };
-                input.click();
-              }}
+              onRefresh={() => void loadDir(currentPath)}
               onDelete={readOnly ? undefined : handleDelete}
               onDownload={handleDownload}
+              deleteConfirmation={{
+                enabled: true,
+                title: "Delete file",
+                description: "Permanently delete this file through the configured file service.",
+                confirmLabel: "Delete file",
+              }}
             />
           )}
         </CardContent>
@@ -224,6 +224,10 @@ export function FileBrowserPage() {
           <FileDropZone
             onDrop={readOnly ? () => {} : handleUpload}
             disabled={readOnly}
+            label="Upload chat file"
+            description={`Files are uploaded through the active chat-session file proxy to ${currentPath}.`}
+            disabledDescription="Read-only access: uploads are disabled for your role."
+            testId="chat-client-file-drop-zone"
           />
         </CardContent>
       </Card>

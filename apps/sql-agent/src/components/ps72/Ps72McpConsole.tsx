@@ -48,7 +48,7 @@ export type Ps72McpConsoleProps = Readonly<{
   hasBoundKey: boolean;
   /** Masked label for the bound identity, e.g. "session • cookie" or "••••1234". */
   boundLabel: string;
-  /** Docs link target (§6) — sql-agent routes Docs to /api-docs. */
+  /** Docs link target (§6) — sql-agent routes Docs to /developer/api-docs. */
   docsHref: string;
   /** Jobs page target (§4.4 / PS-76). */
   jobsHref: string;
@@ -207,6 +207,7 @@ export function Ps72McpConsole(props: Ps72McpConsoleProps) {
       <div className="flex rounded-md border bg-background">
         {/* §1/§3 left scrolling tool list with search */}
         <div className="w-60 shrink-0 border-r p-3">
+          <h2 className="mb-2 text-sm font-semibold">Tool browser</h2>
           <Input
             data-testid="mcp-console-tool-search"
             value={search}

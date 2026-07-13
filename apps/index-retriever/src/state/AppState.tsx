@@ -17,7 +17,7 @@
 import * as React from "react";
 import { useAuth } from "@cloud-dog/auth";
 import { useConfig } from "@cloud-dog/config";
-import { createIndexRetrieverApi, formatApiFailure, validateApiKey } from "../lib/api";
+import { createIndexRetrieverApi, formatApiFailure, getCurrentUserWithApiKey, validateApiKey } from "../lib/api";
 import type { IndexRetrieverApi } from "../lib/api";
 import type { ActivityEvent, ApiFailureInfo, SourceConfig } from "../lib/types";
 import { DEFAULT_SOURCE_CONFIG } from "../lib/types";
@@ -36,6 +36,7 @@ type AppState = Readonly<{
   userId: string;
   displayName: string;
   roles: string[];
+  permissions: string[];
   sourceConfig: SourceConfig;
   latestFailure: ApiFailureInfo | null;
   activity: ActivityEvent[];
@@ -132,6 +133,18 @@ function parseRoles(payload: unknown): string[] {
     .filter(Boolean);
 }
 
+function parsePermissions(payload: unknown): string[] {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return [];
+  const user = (payload as { user?: unknown }).user;
+  if (!user || typeof user !== "object" || Array.isArray(user)) return [];
+  const permissions = (user as { permissions?: unknown }).permissions;
+  if (!Array.isArray(permissions)) return [];
+  return permissions
+    .filter((permission): permission is string => typeof permission === "string")
+    .map((permission) => permission.trim())
+    .filter(Boolean);
+}
+
 function parseUserId(payload: unknown): string {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) return "";
   const user = (payload as { user?: unknown }).user;
@@ -151,13 +164,14 @@ function parseDisplayName(payload: unknown): string {
 export function AppStateProvider(props: { children: React.ReactNode }) {
   const cfg = useConfig<RuntimeConfig>();
   const auth = useAuth();
-  const authMode = cfg.AUTH_MODE ?? "api_key";
+  const authMode = cfg.AUTH_MODE ?? "cookie";
 
   const [apiKey, setApiKey] = React.useState<string>(() => safeStorageGet(API_KEY_STORAGE_KEY));
   const [authError, setAuthError] = React.useState<string | null>(null);
   const [userId, setUserId] = React.useState("");
   const [displayName, setDisplayName] = React.useState("");
   const [roles, setRoles] = React.useState<string[]>([]);
+  const [permissions, setPermissions] = React.useState<string[]>([]);
   const [latestFailure, setLatestFailure] = React.useState<ApiFailureInfo | null>(null);
   const [activity, setActivity] = React.useState<ActivityEvent[]>([]);
   const [sourceConfig, setSourceConfigState] = React.useState<SourceConfig>(() => loadPersistedSourceConfig(cfg));
@@ -206,18 +220,20 @@ export function AppStateProvider(props: { children: React.ReactNode }) {
     () =>
       createIndexRetrieverApi({
         baseUrl: cfg.API_BASE_URL,
-        getAccessToken: () => auth.getAccessToken(),
+        getAccessToken: () => (authMode === "api_key" ? auth.getAccessToken() || apiKey || safeStorageGet(API_KEY_STORAGE_KEY) : null),
         onAuthError: handleAuthError,
       }),
-    [auth, cfg.API_BASE_URL, handleAuthError]
+    [apiKey, auth, authMode, cfg.API_BASE_URL, handleAuthError]
   );
 
   const refreshIdentity = React.useCallback(async () => {
     const payload = await api.getCurrentUser();
     const nextRoles = parseRoles(payload);
+    const nextPermissions = parsePermissions(payload);
     setUserId(parseUserId(payload));
     setDisplayName(parseDisplayName(payload));
     setRoles(nextRoles);
+    setPermissions(nextPermissions);
     return nextRoles;
   }, [api]);
 
@@ -231,10 +247,16 @@ export function AppStateProvider(props: { children: React.ReactNode }) {
 
       try {
         await validateApiKey(cfg.API_BASE_URL, key);
-        await auth.login({ apiKey: key });
-        await refreshIdentity();
+        const identity = await getCurrentUserWithApiKey(cfg.API_BASE_URL, key);
+        const nextRoles = parseRoles(identity);
+        const nextPermissions = parsePermissions(identity);
         setApiKey(key);
         safeStorageSet(API_KEY_STORAGE_KEY, key);
+        setUserId(parseUserId(identity));
+        setDisplayName(parseDisplayName(identity));
+        setRoles(nextRoles);
+        setPermissions(nextPermissions);
+        await auth.login({ apiKey: key });
         setAuthError(null);
         recordActivity("auth.sign_in", "ok");
       } catch (error) {
@@ -248,7 +270,7 @@ export function AppStateProvider(props: { children: React.ReactNode }) {
         throw new Error(label);
       }
     },
-    [auth, cfg.API_BASE_URL, recordActivity, refreshIdentity]
+    [auth, cfg.API_BASE_URL, recordActivity]
   );
 
   React.useEffect(() => {
@@ -270,16 +292,19 @@ export function AppStateProvider(props: { children: React.ReactNode }) {
     if (auth.isLoading) return;
     if (!auth.isAuthenticated) {
       if (roles.length > 0) setRoles([]);
+      if (permissions.length > 0) setPermissions([]);
       if (userId) setUserId("");
       if (displayName) setDisplayName("");
       return;
     }
+    if (authMode === "api_key" && !(auth.getAccessToken()?.trim() || apiKey || safeStorageGet(API_KEY_STORAGE_KEY))) return;
     void refreshIdentity().catch(() => {
       setRoles([]);
+      setPermissions([]);
       setUserId("");
       setDisplayName("");
     });
-  }, [auth.isAuthenticated, auth.isLoading, displayName, refreshIdentity, roles.length, userId]);
+  }, [apiKey, auth, auth.isAuthenticated, auth.isLoading, authMode, displayName, permissions.length, refreshIdentity, roles.length, userId]);
 
   React.useEffect(() => {
     safeStorageSet(SOURCE_CONFIG_STORAGE_KEY, JSON.stringify(sourceConfig));
@@ -296,6 +321,7 @@ export function AppStateProvider(props: { children: React.ReactNode }) {
     userId,
     displayName,
     roles,
+    permissions,
     sourceConfig,
     latestFailure,
     activity,

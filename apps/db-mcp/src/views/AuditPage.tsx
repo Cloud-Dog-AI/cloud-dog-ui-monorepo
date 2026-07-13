@@ -13,6 +13,7 @@
 // limitations under the License.
 
 import * as React from "react";
+import { useSearchParams } from "react-router-dom";
 import { useAuth } from "@cloud-dog/auth";
 import { AuditPanel, LogTablePanel, ResourceMetrics, type LogApiAdapter, type AuditLogEntry, type LogEntry, type LogsResponse } from "@cloud-dog/ui";
 import { useDbMcpState } from "../state/AppState";
@@ -44,11 +45,13 @@ export function auditEventToLogEntry(event: AuditEvent): AuditLogEntry {
     message: null,
     trace_id: event.trace_id ?? event.correlation_id ?? null,
     request_id: event.request_id ?? null,
+    session_id: event.session_id ?? null,
+    correlation_id: event.correlation_id ?? null,
     service: event.service ?? null,
     service_instance: event.service_instance ?? null,
     environment: event.environment ?? null,
     surface: "audit",
-    surface_label: "Audit",
+    surface_label: "Audit & Log",
     source_path: null,
     logger: null,
     actor: event.actor ? {
@@ -105,7 +108,7 @@ function createLogApiAdapter(api: DbMcpApi): LogApiAdapter {
           entries,
           count: entries.length,
           available_surfaces: [
-            { id: "audit", label: "Audit" },
+            { id: "audit", label: "Audit & Log" },
             { id: "api", label: "API" },
             { id: "web", label: "Web" },
             { id: "mcp", label: "MCP" },
@@ -119,7 +122,7 @@ function createLogApiAdapter(api: DbMcpApi): LogApiAdapter {
         entries,
         count: entries.length,
         available_surfaces: [
-          { id: "audit", label: "Audit" },
+          { id: "audit", label: "Audit & Log" },
           { id: "api", label: "API" },
           { id: "web", label: "Web" },
           { id: "mcp", label: "MCP" },
@@ -130,9 +133,22 @@ function createLogApiAdapter(api: DbMcpApi): LogApiAdapter {
   };
 }
 
+// W28E-610 CX-104: keys carried by row-level "Audit" deep-links (/audit-log?<key>=<value>).
+const AUDIT_DEEP_LINK_KEYS = ["actor_id", "user_id", "group_id", "key_id", "profile_id", "relationship_id", "job_id"] as const;
+
 export function AuditPage() {
   const auth = useAuth();
   const { api } = useDbMcpState();
+  // CX-104: consume the deep-link query parameter so row-level Audit links land
+  // with visible filter context (the link is meaningful, not ignored).
+  const [searchParams] = useSearchParams();
+  const auditDeepLink = React.useMemo(() => {
+    for (const key of AUDIT_DEEP_LINK_KEYS) {
+      const value = searchParams.get(key);
+      if (value) return { key, value };
+    }
+    return null;
+  }, [searchParams]);
   const [activeType, setActiveType] = React.useState<(typeof LOG_TYPES)[number]>("api");
   const [logs, setLogs] = React.useState<LogEntry[]>([]);
   const [autoFollow, setAutoFollow] = React.useState(true);
@@ -157,11 +173,17 @@ export function AuditPage() {
   return (
     <div className="space-y-6">
       <header className="space-y-2">
-        <h1 className="text-2xl font-semibold">Audit</h1>
-        <p className="text-sm text-muted-foreground">Resource metrics, structured server logs, and NIST AU-3 audit events.</p>
+        <h1 className="text-2xl font-semibold">Audit & Log</h1>
+        <p className="text-sm text-muted-foreground">Resource metrics, structured service logs, and NIST AU-3 audit events.</p>
       </header>
 
       {error ? <p role="alert" className="text-sm text-destructive">{error}</p> : null}
+
+      {auditDeepLink ? (
+        <div role="status" data-testid="audit-deeplink-filter" className="rounded-md border border-primary/40 bg-primary/5 px-3 py-2 text-sm">
+          Showing audit context for <code className="font-mono">{auditDeepLink.key}={auditDeepLink.value}</code>. Use the search box in the audit table below to refine.
+        </div>
+      ) : null}
 
       <details className="rounded-lg border p-3">
         <summary className="cursor-pointer text-sm font-medium text-muted-foreground">System metrics (resource monitoring — see Settings for full health)</summary>
@@ -194,11 +216,11 @@ export function AuditPage() {
       <LogTablePanel
         api={logAdapter}
         tableId="db-mcp-audit-nist"
-        title="Audit events (NIST AU-3)"
+        title="Audit & Log events (NIST AU-3)"
         description="Structured audit log with actor, target, outcome, and correlation fields per PS-40."
         initialSurface="audit"
         limit={100}
-        defaultVisibleColumns={["timestamp", "who", "action", "target", "outcome", "severity", "traceId", "service", "message", "inspect"]}
+        defaultVisibleColumns={["timestamp", "who", "action", "target", "outcome", "severity", "session", "traceId", "service", "message", "inspect"]}
       />
     </div>
   );

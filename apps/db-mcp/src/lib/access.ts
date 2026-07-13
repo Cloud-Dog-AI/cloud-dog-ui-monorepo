@@ -88,6 +88,10 @@ export function canManageProfiles(user: User | null | undefined): boolean {
   return hasRole(user, "admin") || hasRole(user, "data_steward") || hasPermission(user, "profile.manage");
 }
 
+export function canManageSourceConnections(user: User | null | undefined): boolean {
+  return hasRole(user, "admin") || hasPermission(user, "admin.write");
+}
+
 export function canCreateOrUpdateData(user: User | null | undefined): boolean {
   return hasAnyPermission(user, ["data.create", "data.update", "data.delete"]);
 }

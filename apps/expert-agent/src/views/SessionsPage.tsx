@@ -1,9 +1,9 @@
 import * as React from 'react';
-import { Badge, Button, Card, CardContent, CardHeader, JsonBlock, statusColumn } from '@cloud-dog/ui';
+import { Badge, Button, Card, CardContent, CardHeader, Input, JsonBlock, SessionsHistoryPanel } from '@cloud-dog/ui';
+import type { SessionsHistoryAction, SessionsHistoryRow } from '@cloud-dog/ui';
 import { useExpertAgentState } from '../state/AppState';
 import type { ExpertRecord, SessionMessageRecord, SessionRecord } from '../lib/api';
-import { AppDataTable } from '../lib/data-table-adapter';
-import { LoadingNote, PageScaffold, formatCount, renderRelativeTime } from './shared';
+import { renderRelativeTime } from './shared';
 
 
 export function SessionsPage() {
@@ -15,6 +15,7 @@ export function SessionsPage() {
   const [showRaw, setShowRaw] = React.useState(false);
   const [loading, setLoading] = React.useState(true);
   const [status, setStatus] = React.useState<string | null>(null);
+  const [query, setQuery] = React.useState('');
 
   const refresh = React.useCallback(async () => {
     clearFailure();
@@ -57,7 +58,6 @@ export function SessionsPage() {
   }, [api, captureFailure, clearFailure]);
 
   const deleteSession = React.useCallback(async (session: SessionRecord) => {
-    if (!window.confirm(`Delete session ${session.title ?? session.id}?`)) return;
     clearFailure();
     try {
       await api.deleteSession(session.id);
@@ -72,7 +72,6 @@ export function SessionsPage() {
   /* EXPWEB-067: bulk delete */
   const bulkDeleteSessions = React.useCallback(async (selected: SessionRecord[]) => {
     if (!selected.length) return;
-    if (!window.confirm(`Delete ${selected.length} selected sessions?`)) return;
     clearFailure();
     try {
       await Promise.all(selected.map(async (session) => api.deleteSession(session.id)));
@@ -97,49 +96,98 @@ export function SessionsPage() {
   const navigateToLogs = React.useCallback((session: SessionRecord) => {
     const params = new URLSearchParams();
     params.set('filter_session', String(session.id));
-    window.location.href = `/admin/monitoring?${params.toString()}`;
+    window.location.href = `/audit-log?${params.toString()}`;
   }, []);
 
+  const filteredSessions = React.useMemo(() => {
+    const trimmed = query.trim().toLowerCase();
+    if (!trimmed) return sessions;
+    return sessions.filter((session) => [
+      String(session.id),
+      session.title ?? '',
+      session.status ?? '',
+      expertNameFor(session),
+    ].join(' ').toLowerCase().includes(trimmed));
+  }, [expertNameFor, query, sessions]);
+
+  const panelRows = React.useMemo<SessionsHistoryRow[]>(() => filteredSessions.map((session) => ({
+    id: String(session.id),
+    label: session.title ?? `Session ${session.id}`,
+    title: session.title ?? `Session ${session.id}`,
+    status: session.status ?? 'not reported',
+    actor: session.user_id ? `User ${session.user_id}` : undefined,
+    target: expertNameFor(session),
+    createdAt: session.created_at ?? undefined,
+    updatedAt: session.updated_at ?? undefined,
+    summary: `Expert ${expertNameFor(session)}`,
+    details: [
+      { label: 'ID', value: session.id },
+      { label: 'Expert', value: expertNameFor(session) },
+      ...(session.user_id ? [{ label: 'User ID', value: session.user_id }] : []),
+    ],
+    relatedItems: [
+      { id: `chat-${session.id}`, label: 'Open in Chat', href: `/chat?session_id=${encodeURIComponent(String(session.id))}` },
+      { id: `logs-${session.id}`, label: 'View Logs', href: `/audit-log?filter_session=${encodeURIComponent(String(session.id))}` },
+    ],
+  })), [expertNameFor, filteredSessions]);
+
+  const rowActions = React.useCallback((row: SessionsHistoryRow): SessionsHistoryAction[] => {
+    const session = sessions.find((item) => String(item.id) === row.id);
+    if (!session) return [];
+    return [
+      { id: 'view-history', label: 'View History', onClick: () => void viewSession(session) },
+      { id: 'open-chat', label: 'Open in Chat', onClick: () => navigateToChat(session) },
+      { id: 'view-logs', label: 'View Logs', onClick: () => navigateToLogs(session) },
+      {
+        id: 'delete',
+        label: 'Delete',
+        destructive: true,
+        onClick: () => void deleteSession(session),
+        confirm: {
+          title: 'Delete Session',
+          description: 'Delete this expert-agent session and retained conversation history.',
+          confirmLabel: 'Delete',
+        },
+      },
+    ];
+  }, [deleteSession, navigateToChat, navigateToLogs, sessions, viewSession]);
+
+  const onBulkAction = React.useCallback((action: string, selectedIds: string[]) => {
+    if (action !== 'delete') return;
+    const selected = sessions.filter((session) => selectedIds.includes(String(session.id)));
+    void bulkDeleteSessions(selected);
+  }, [bulkDeleteSessions, sessions]);
+
   return (
-    /* EXPWEB-062/063: removed SummaryGrid and contract surface */
-    <PageScaffold title="Sessions" description="Session inventory with sorting, bulk selection, and conversation history." alert={latestFailure} status={status}>
-      <LoadingNote loading={loading} />
-      <AppDataTable
-        title="Session inventory"
-        rows={sessions}
-        getRowId={(session) => String(session.id)}
-        emptyMessage="No sessions reported by the backend."
-        itemLabel="sessions"
-        onRefresh={refresh}
-        /* EXPWEB-067: all columns sortable */
-        columns={[
-          { id: 'id', header: 'ID', sortable: true, sortValue: (session) => session.id, cell: (session) => session.id },
-          { id: 'title', header: 'Title', sortable: true, sortValue: (session) => session.title ?? '', cell: (session) => session.title ?? `Session ${session.id}` },
-          statusColumn<SessionRecord>({ getValue: (session) => session.status ?? 'not reported' }),
-          { id: 'expert', header: 'Expert', sortable: true, sortValue: (session) => expertNameFor(session), cell: (session) => expertNameFor(session) },
-          /* EXPWEB-066: RelativeTime handles UTC → local automatically */
-          { id: 'started', header: 'Started', sortable: true, sortValue: (session) => session.created_at ?? '', cell: (session) => renderRelativeTime(session.created_at) },
-          { id: 'updated', header: 'Updated', sortable: true, sortValue: (session) => session.updated_at ?? '', cell: (session) => renderRelativeTime(session.updated_at) },
-        ]}
-        /* EXPWEB-067: multi-select with row actions including View, Chat, Logs, Delete */
-        rowActions={[
-          { label: 'View History', onClick: (session) => void viewSession(session) },
-          /* EXPWEB-061/064: View Timeline / View Messages → Chat */
-          { label: 'Open in Chat', onClick: navigateToChat },
-          /* EXPWEB-065: audit/log link */
-          { label: 'View Logs', onClick: navigateToLogs },
-          { label: 'Delete', variant: 'destructive', onClick: (session) => void deleteSession(session) },
-        ]}
-        bulkActions={[
-          { label: 'Delete Selected', variant: 'destructive', onClick: (rows) => void bulkDeleteSessions(rows) },
-        ]}
-        searchText={(session) => [
-          String(session.id),
-          session.title ?? '',
-          session.status ?? '',
-          expertNameFor(session),
-        ].join(' ')}
+    <div className="space-y-6">
+      <Input
+        aria-label="Search sessions"
+        className="max-w-md"
+        placeholder="Search sessions"
+        value={query}
+        onChange={(event) => setQuery(event.target.value)}
       />
+      <SessionsHistoryPanel
+        title="Sessions"
+        description="Session inventory with sorting, bulk selection, and conversation history."
+        rows={panelRows}
+        loading={loading}
+        error={latestFailure}
+        canonicalRoute="/sessions"
+        onRefresh={() => void refresh()}
+        actionsForRow={rowActions}
+        bulkActions={[{ label: 'Delete Selected', action: 'delete' }]}
+        onBulkAction={onBulkAction}
+        bulkActionConfirm={(action, selectedIds) => action === 'delete' ? {
+          title: 'Delete Selected Sessions',
+          description: `Delete ${selectedIds.length} selected expert-agent sessions and retained conversation history.`,
+          confirmLabel: 'Delete Selected',
+        } : undefined}
+        selectable
+        emptyMessage="No sessions reported by the backend."
+        tableId="expert-agent-sessions"
+      />
+      {status ? <p role="status" className="text-sm text-foreground/80">{status}</p> : null}
       {/* EXPWEB-060: full conversation history in detail pane (removed EXPWEB-064 inline detail; kept as expandable) */}
       {selectedSession ? (
         <div data-testid="session-detail-pane" className="grid gap-4 xl:grid-cols-[1fr_1.4fr]">
@@ -204,6 +252,6 @@ export function SessionsPage() {
           </Card>
         </div>
       ) : null}
-    </PageScaffold>
+    </div>
   );
 }

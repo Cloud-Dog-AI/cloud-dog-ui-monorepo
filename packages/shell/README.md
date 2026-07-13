@@ -11,9 +11,17 @@ npm install @cloud-dog/shell
 ## Example
 
 ```tsx
-import { AppShell } from '@cloud-dog/shell';
+import { CopyrightFooter, ShellLayout } from '@cloud-dog/shell';
 
-<AppShell appName="Cloud-Dog" navItems={[]}>
-  <main>Dashboard</main>
-</AppShell>
+<ShellLayout
+  appName="Cloud-Dog"
+  navItems={[]}
+  footer={<CopyrightFooter disableVersionProbe />}
+>
+  <section>Dashboard</section>
+</ShellLayout>
 ```
+
+`ShellLayout` exposes stable `cloud-dog-shell-*` test IDs by default. The
+`footer` slot is for the shared `CopyrightFooter` or a service wrapper that keeps
+the same copyright/version contract.

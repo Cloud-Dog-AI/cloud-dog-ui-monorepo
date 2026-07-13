@@ -95,7 +95,7 @@ export function McpToolsPage() {
       hasBoundKey={hasBoundKey}
       boundLabel={boundLabel}
       docsHref="/api-docs"
-      jobsHref="/jobs"
+      jobsHref="/system/jobs"
       onExecute={onExecute}
     />
   );

@@ -27,10 +27,6 @@ export default defineConfig({
     exclude: ['@cloud-dog/ui'],
   },
   server: {
-    watch: {
-      usePolling: true,
-      interval: 1000,
-    },
     proxy: {
       '/api/': {
         target: proxyTarget,

@@ -13,11 +13,18 @@
 // Covers: UI-R5
 
 import * as React from 'react';
-import { Button, Card, CardContent, CardHeader, Badge, Input, Label, Select, SettingsPanel } from '@cloud-dog/ui';
+import { Button, Card, CardContent, CardHeader, Badge, Input, JsonExplorer, Label, RelativeTime, Select, SettingsPanel } from '@cloud-dog/ui';
 import { useConfig } from '@cloud-dog/config';
-import type { SettingGroupDef } from '@cloud-dog/ui';
+import type { JsonExplorerSourceMap, SettingsPanelServerTab } from '@cloud-dog/ui';
 import { useNotificationAgentState } from '../state/AppState';
 import type { RuntimeHealth } from '../lib/api';
+import {
+  SETTINGS_INVENTORY_KEYS,
+  SETTINGS_SECRET_KEYS,
+  SETTINGS_SERVER_TABS,
+  SETTINGS_SOURCE_MAP,
+  type SettingsServerTab,
+} from './settingsInventory';
 
 // PS-73 SW4 — Secrets masking
 const SECRET_PATTERNS = /password|secret|token|api_key|credential|private_key/i;
@@ -53,6 +60,74 @@ function pickSection(source: Record<string, unknown>, keys: string[]): Record<st
   return section;
 }
 
+function pathParts(path: string): string[] {
+  return path.replace(/\[(\d+)\]/g, '.$1').split('.').filter(Boolean);
+}
+
+function getPathValue(source: unknown, path: string): unknown {
+  let current = source;
+  for (const part of pathParts(path)) {
+    if (current == null) return null;
+    if (Array.isArray(current)) {
+      current = current[Number(part)];
+    } else if (typeof current === 'object') {
+      current = (current as Record<string, unknown>)[part];
+    } else {
+      return null;
+    }
+  }
+  return current ?? null;
+}
+
+function setPathValue(target: Record<string, unknown>, path: string, value: unknown): void {
+  const parts = pathParts(path);
+  let current: Record<string, unknown> = target;
+  parts.forEach((part, index) => {
+    const last = index === parts.length - 1;
+    if (last) {
+      current[part] = value;
+      return;
+    }
+    const next = current[part];
+    if (!next || typeof next !== 'object' || Array.isArray(next)) {
+      current[part] = {};
+    }
+    current = current[part] as Record<string, unknown>;
+  });
+}
+
+function buildInventoryTree(configDump: Record<string, unknown>, tab: SettingsServerTab): Record<string, unknown> {
+  const tree: Record<string, unknown> = {};
+  for (const key of SETTINGS_INVENTORY_KEYS) {
+    const meta = SETTINGS_SOURCE_MAP[key];
+    const servers = meta?.servers ?? ['shared'];
+    const include = tab === 'ALL' || servers.includes(tab) || servers.includes('shared');
+    if (include) {
+      setPathValue(tree, key, getPathValue(configDump, key));
+    }
+  }
+  return tree;
+}
+
+function buildTabSourceMap(tab: SettingsServerTab): JsonExplorerSourceMap {
+  if (tab === 'ALL') return SETTINGS_SOURCE_MAP;
+  const scoped = Object.entries(SETTINGS_SOURCE_MAP).filter(([, meta]) => {
+    const servers = meta.servers ?? ['shared'];
+    return servers.includes(tab) || servers.includes('shared');
+  });
+  return Object.fromEntries(scoped) as JsonExplorerSourceMap;
+}
+
+function downloadJson(filename: string, payload: unknown) {
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = filename;
+  anchor.click();
+  URL.revokeObjectURL(url);
+}
+
 type RuntimeConfig = Readonly<{
   ENV: string;
   API_BASE_URL: string;
@@ -63,7 +138,6 @@ type RuntimeConfig = Readonly<{
   DB_PATH?: string;
 }>;
 
-const SETTINGS_KEYS = ['app.title', 'app.default_language', 'web_server.session_max_age'] as const;
 const importMetaEnv = (import.meta as unknown as { env?: Record<string, string | undefined> }).env ?? {};
 const UI_BUILD_VERSION = importMetaEnv.VITE_APP_VERSION
   ?? importMetaEnv.VITE_GIT_SHA
@@ -86,7 +160,7 @@ function splitContentStylePreference(value: string | null | undefined): { conten
     const [, rawLimit] = text.split(':', 2);
     return { contentStyle: 'summary+link', summaryMaxChars: rawLimit || '200' };
   }
-  return { contentStyle: text || 'html', summaryMaxChars: '200' };
+  return { contentStyle: text || 'short', summaryMaxChars: '200' };
 }
 
 export function SettingsPage() {
@@ -95,43 +169,28 @@ export function SettingsPage() {
   const [status, setStatus] = React.useState('');
   const [loading, setLoading] = React.useState(true);
   const [healthData, setHealthData] = React.useState<RuntimeHealth | null>(null);
-  const [profileData, setProfileData] = React.useState<{ groups: string[]; lastLogin: string | null; language: string | null; preferredChannel: string | null; contentStyle: string | null } | null>(null);
+  const [profileData, setProfileData] = React.useState<{ groups: string[]; lastLogin: string | null; language: string | null; preferredChannel: string | null; contentStyle: string | null; timezone: string | null; keywords: string[] } | null>(null);
   const [profileUserId, setProfileUserId] = React.useState<number | null>(null);
+  const [activeSettingsTab, setActiveSettingsTab] = React.useState<SettingsServerTab>('ALL');
+  const [settingsSearch, setSettingsSearch] = React.useState('');
+  const [revealedSecrets, setRevealedSecrets] = React.useState<Set<string>>(() => new Set());
+  const [settingsAudit, setSettingsAudit] = React.useState<Array<{ ts: number; text: string }>>([]);
   const [preferenceForm, setPreferenceForm] = React.useState({
     language: 'en',
     preferredChannel: '',
-    contentStyle: 'html',
+    contentStyle: 'short',
     summaryMaxChars: '200',
+    timezone: 'UTC',
+    keywords: '',
   });
   const [configDump, setConfigDump] = React.useState<Record<string, unknown>>({});
-  const [form, setForm] = React.useState<Record<string, unknown>>({
-    'runtime.env': '',
-    'runtime.auth_mode': 'cookie',
-    'runtime.api_base_url': '',
-    'runtime.mcp_base_url': '',
-    'runtime.a2a_base_url': '',
-    'app.title': '',
-    'app.default_language': 'en',
-    'web_server.session_max_age': 3600,
-  });
 
   const loadSettings = React.useCallback(async () => {
     clearFailure();
     setLoading(true);
     try {
-      const values = await api.queryConfig([...SETTINGS_KEYS]);
       const dump = await api.getConfigDump();
       setConfigDump(dump);
-      setForm({
-        'runtime.env': cfg.ENV,
-        'runtime.auth_mode': cfg.AUTH_MODE ?? 'cookie',
-        'runtime.api_base_url': cfg.API_BASE_URL,
-        'runtime.mcp_base_url': cfg.MCP_BASE_URL ?? '',
-        'runtime.a2a_base_url': cfg.A2A_BASE_URL ?? '',
-        'app.title': String(values['app.title'] ?? ''),
-        'app.default_language': String(values['app.default_language'] ?? 'en'),
-        'web_server.session_max_age': Number(values['web_server.session_max_age'] ?? 3600),
-      });
       setStatus('Loaded runtime settings.');
     } catch (error) {
       setStatus('');
@@ -139,7 +198,7 @@ export function SettingsPage() {
     } finally {
       setLoading(false);
     }
-  }, [api, captureFailure, cfg.A2A_BASE_URL, cfg.API_BASE_URL, cfg.AUTH_MODE, cfg.ENV, cfg.MCP_BASE_URL, clearFailure]);
+  }, [api, captureFailure, clearFailure]);
 
   React.useEffect(() => {
     void loadSettings();
@@ -156,8 +215,7 @@ export function SettingsPage() {
     // NOTIFWEB-096: load profile (groups + last_login) + NOTIFWEB-099: preferences
     void (async () => {
       try {
-        const users = await api.listUsers();
-        const me = users.find((u) => u.role === 'admin') ?? users[0];
+        const me = await api.getMyPreferences();
         if (!me || !active) return;
         const groups = await api.listGroups();
         const myGroups: string[] = [];
@@ -175,6 +233,10 @@ export function SettingsPage() {
           setPreferenceForm({
             language: ((me as Record<string, unknown>).language as string | null) ?? 'en',
             preferredChannel: ((me as Record<string, unknown>).preferred_channel as string | null) ?? '',
+            timezone: ((me as Record<string, unknown>).timezone as string | null) ?? 'UTC',
+            keywords: Array.isArray((me as Record<string, unknown>).keywords)
+              ? ((me as Record<string, unknown>).keywords as string[]).join(', ')
+              : '',
             ...stylePreference,
           });
           setProfileData({
@@ -185,6 +247,10 @@ export function SettingsPage() {
             contentStyle: stylePreference.contentStyle === 'summary+link'
               ? `summary+link:${stylePreference.summaryMaxChars}`
               : stylePreference.contentStyle,
+            timezone: (me as Record<string, unknown>).timezone as string | null,
+            keywords: Array.isArray((me as Record<string, unknown>).keywords)
+              ? ((me as Record<string, unknown>).keywords as string[])
+              : [],
           });
         }
       } catch { /* best effort */ }
@@ -193,60 +259,6 @@ export function SettingsPage() {
       active = false;
     };
   }, [api]);
-
-  const groups: SettingGroupDef[] = [
-    {
-      id: 'app',
-      label: 'Application',
-      settings: [
-        {
-          key: 'app.title',
-          label: 'Application title',
-          type: 'text',
-          value: form['app.title'],
-          description: 'Displayed in the shell and login experience.',
-        },
-        {
-          key: 'app.default_language',
-          label: 'Default language',
-          type: 'select',
-          value: form['app.default_language'],
-          options: ['en', 'fr', 'de', 'es'],
-          description: 'Default language for new templates and messages.',
-        },
-        {
-          key: 'web_server.session_max_age',
-          label: 'Session max age',
-          type: 'number',
-          value: form['web_server.session_max_age'],
-          description: 'Cookie session lifetime in seconds.',
-        },
-      ],
-    },
-  ];
-
-  const saveSetting = async (key: string, value: unknown) => {
-    setForm((current) => ({ ...current, [key]: value }));
-  };
-
-  const persistSettings = async () => {
-    clearFailure();
-    setStatus('');
-    try {
-      await api.updateConfig({
-        updates: {
-          'app.title': form['app.title'],
-          'app.default_language': form['app.default_language'],
-          'web_server.session_max_age': Number(form['web_server.session_max_age'] ?? 3600),
-        },
-        persist: true,
-      });
-      await loadSettings();
-      setStatus('Saved runtime settings.');
-    } catch (error) {
-      captureFailure(error);
-    }
-  };
 
   const runHealthCheck = async () => {
     clearFailure();
@@ -271,16 +283,24 @@ export function SettingsPage() {
       const contentStyle = preferenceForm.contentStyle === 'summary+link'
         ? `summary+link:${preferenceForm.summaryMaxChars || '200'}`
         : preferenceForm.contentStyle;
-      await api.updateUser(profileUserId, {
+      const keywords = preferenceForm.keywords
+        .split(',')
+        .map((item) => item.trim())
+        .filter(Boolean);
+      await api.updateMyPreferences({
         language: preferenceForm.language,
         preferred_channel: preferenceForm.preferredChannel,
         content_style: contentStyle,
+        timezone: preferenceForm.timezone,
+        keywords,
       });
       setProfileData((current) => current ? {
         ...current,
         language: preferenceForm.language,
         preferredChannel: preferenceForm.preferredChannel,
         contentStyle,
+        timezone: preferenceForm.timezone,
+        keywords,
       } : current);
       setStatus('Saved profile preferences.');
     } catch (error) {
@@ -288,23 +308,92 @@ export function SettingsPage() {
     }
   };
 
+  const deletePreferences = async () => {
+    clearFailure();
+    setStatus('');
+    try {
+      await api.deleteMyPreferences();
+      setPreferenceForm({
+        language: 'en',
+        preferredChannel: '',
+        contentStyle: 'short',
+        summaryMaxChars: '200',
+        timezone: 'UTC',
+        keywords: '',
+      });
+      setProfileData((current) => current ? {
+        ...current,
+        language: null,
+        preferredChannel: null,
+        contentStyle: null,
+        timezone: null,
+        keywords: [],
+      } : current);
+      setStatus('Deleted profile preferences.');
+    } catch (error) {
+      captureFailure(error);
+    }
+  };
+
   const healthOk = healthData != null && healthStatusOk(healthData.status);
   const maskedConfig = React.useMemo(() => maskSecrets(configDump) as Record<string, unknown>, [configDump]);
+  const settingsSources = React.useMemo(() => buildTabSourceMap(activeSettingsTab), [activeSettingsTab]);
+  const renderedKeyCount = React.useMemo(() => Object.keys(settingsSources).length, [settingsSources]);
+  const settingsPanelTabs = React.useMemo<SettingsPanelServerTab[]>(
+    () =>
+      SETTINGS_SERVER_TABS.map((tab) => ({
+        id: tab.toLowerCase(),
+        label: tab,
+        data: buildInventoryTree(maskedConfig, tab),
+        sources: buildTabSourceMap(tab),
+        description: `${tab} settings`,
+      })),
+    [maskedConfig],
+  );
+  const secretSampleKeys = React.useMemo(() => SETTINGS_SECRET_KEYS.slice(0, 5), []);
   const serverSection = React.useMemo(() => pickSection(maskedConfig, ['app', 'api_server', 'web_server', 'mcp_server', 'a2a_server']), [maskedConfig]);
   const authSection = React.useMemo(() => pickSection(maskedConfig, ['auth', 'web_server']), [maskedConfig]);
   const storageSection = React.useMemo(() => pickSection(maskedConfig, ['database', 'storage', 'db', 'channels']), [maskedConfig]);
   const loggingSection = React.useMemo(() => pickSection(maskedConfig, ['log']), [maskedConfig]);
   const serviceSpecificSection = React.useMemo(() => pickSection(maskedConfig, ['llm', 'jobs', 'rbac', 'test']), [maskedConfig]);
+  const exportEffectiveConfig = React.useCallback(() => {
+    downloadJson('notification-agent-effective-config-masked.json', buildInventoryTree(maskedConfig, 'ALL'));
+    setSettingsAudit((current) => [{ ts: Date.now(), text: 'export masked effective config' }, ...current].slice(0, 8));
+    setStatus('Downloaded masked effective config.');
+  }, [maskedConfig]);
+  const revealSecret = React.useCallback((key: string) => {
+    setRevealedSecrets((current) => {
+      const next = new Set(current);
+      next.add(key);
+      return next;
+    });
+    setSettingsAudit((current) => [{ ts: Date.now(), text: `admin reveal requested for ${key}` }, ...current].slice(0, 8));
+  }, []);
 
   return (
     <div className="space-y-6">
-      <header className="space-y-2">
-        <h1 className="text-2xl font-semibold">Settings</h1>
-        <p className="text-sm text-muted-foreground">Shared settings panel for live runtime configuration and read-only environment metadata.</p>
-      </header>
-
-      {latestFailure ? <p role="alert" className="text-sm text-destructive">{latestFailure}</p> : null}
-      {status ? <p role="status" className="text-sm text-foreground/80">{status}</p> : null}
+      <SettingsPanel
+        title="Settings"
+        serviceName="notification-agent"
+        version={displayVersion(String(asRecord(maskedConfig.app).version || healthData?.version || ''))}
+        description="Live runtime configuration and read-only environment metadata."
+        statusItems={[
+          { label: "keys", value: renderedKeyCount, testId: "settings-key-count" },
+          { label: healthOk ? "health ok" : "health unknown", variant: healthOk ? "default" : "destructive" },
+        ]}
+        serverTabs={settingsPanelTabs}
+        activeServerId={activeSettingsTab.toLowerCase()}
+        onActiveServerChange={(serverId) => setActiveSettingsTab(serverId.toUpperCase() as SettingsServerTab)}
+        searchTerm={settingsSearch}
+        onSearchTermChange={setSettingsSearch}
+        revealedSecrets={revealedSecrets}
+        maxDepth={12}
+        error={latestFailure}
+        loading={loading}
+        onRefresh={() => void loadSettings()}
+        onExport={exportEffectiveConfig}
+        footer={status ? <p role="status" className="text-sm text-foreground/80">{status}</p> : null}
+      >
 
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
         <div>
@@ -328,6 +417,92 @@ export function SettingsPage() {
           <Input id="settings-a2a-base-url" value={cfg.A2A_BASE_URL ?? ''} readOnly />
         </div>
       </div>
+
+      <Card>
+        <CardHeader><h2 className="text-lg font-semibold">Admin Reveal</h2></CardHeader>
+        <CardContent className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(0,2fr)]">
+          <div className="flex flex-wrap gap-2">
+            {secretSampleKeys.map((key) => (
+              <Button
+                key={key}
+                type="button"
+                size="sm"
+                variant="secondary"
+                data-testid="settings-secret-reveal-toggle"
+                data-key-path={key}
+                title={`Reveal ${key}`}
+                onClick={() => revealSecret(key)}
+              >
+                Reveal
+              </Button>
+            ))}
+          </div>
+          <ul data-testid="settings-audit-log" className="space-y-1 text-xs text-muted-foreground">
+            {settingsAudit.length > 0 ? settingsAudit.map((entry, idx) => <li key={`${entry.ts}-${idx}`}><RelativeTime timestamp={entry.ts} /> · {entry.text}</li>) : <li>No settings actions recorded.</li>}
+          </ul>
+        </CardContent>
+      </Card>
+
+      {/* XC-009 (d) / CX-140 — Build metadata Card (JsonExplorer table view). */}
+      <Card>
+        <CardHeader>
+          <h2 className="text-lg font-semibold">Build metadata</h2>
+          <p className="text-sm text-muted-foreground">Version, build identity, and runtime environment of the running container.</p>
+        </CardHeader>
+        <CardContent>
+          <JsonExplorer
+            title=""
+            testId="ps81-json-explorer-build"
+            data={{
+              application: String(asRecord((maskSecrets(configDump) as Record<string, unknown>).app).name || healthData?.application || 'notification-agent-mcp-server'),
+              version: displayVersion(String(asRecord((maskSecrets(configDump) as Record<string, unknown>).app).version || healthData?.version || '')),
+              ui_build: UI_BUILD_VERSION,
+              api_version: 'v1',
+              environment: cfg.ENV,
+              api_base_url: cfg.API_BASE_URL,
+            }}
+            defaultExpanded
+            maxDepth={3}
+            viewMode="table"
+          />
+        </CardContent>
+      </Card>
+
+      {/* XC-009 (e) / CX-140 — Diagnostics Card (JsonExplorer table view). */}
+      <Card>
+        <CardHeader>
+          <h2 className="text-lg font-semibold">Diagnostics</h2>
+          <p className="text-sm text-muted-foreground">Service identity, health, storage/backend and logging snapshot. Secrets are masked.</p>
+        </CardHeader>
+        <CardContent>
+          <JsonExplorer
+            title=""
+            testId="ps81-json-explorer-diagnostics"
+            data={{
+              status: healthData?.status ?? 'loading',
+              application: healthData?.application ?? 'N/A',
+              version: displayVersion(healthData?.version),
+              health: (healthData ?? { status: 'loading' }) as Record<string, unknown>,
+              storage_backend: pickSection(maskSecrets(configDump) as Record<string, unknown>, ['database', 'storage', 'db', 'channels']),
+              logging: pickSection(maskSecrets(configDump) as Record<string, unknown>, ['log']),
+            }}
+            defaultExpanded
+            maxDepth={5}
+            viewMode="table"
+          />
+        </CardContent>
+      </Card>
+
+      {/* XC-009 (f) / CX-140 — Runtime configuration Card (full effective config tree, JsonExplorer table view). */}
+      <Card>
+        <CardHeader>
+          <h2 className="text-lg font-semibold">Runtime configuration</h2>
+          <p className="text-sm text-muted-foreground">Effective merged config tree. Secrets are masked by default.</p>
+        </CardHeader>
+        <CardContent>
+          <JsonExplorer title="" testId="ps81-json-explorer-runtime" data={maskSecrets(configDump) as Record<string, unknown>} maxDepth={6} viewMode="table" />
+        </CardContent>
+      </Card>
 
       {/* NOTIFWEB-095: About/Version summary */}
       <Card>
@@ -356,6 +531,8 @@ export function SettingsPage() {
               <div><dt className="font-medium text-muted-foreground">Language</dt><dd data-testid="profile-language">{profileData.language ?? 'Not set'}</dd></div>
               <div><dt className="font-medium text-muted-foreground">Preferred channel</dt><dd data-testid="profile-channel">{profileData.preferredChannel ?? 'Not set'}</dd></div>
               <div><dt className="font-medium text-muted-foreground">Content style</dt><dd data-testid="profile-style">{profileData.contentStyle ?? 'Not set'}</dd></div>
+              <div><dt className="font-medium text-muted-foreground">Timezone</dt><dd data-testid="profile-timezone">{profileData.timezone ?? 'Not set'}</dd></div>
+              <div><dt className="font-medium text-muted-foreground">Keywords</dt><dd data-testid="profile-keywords">{profileData.keywords.length > 0 ? profileData.keywords.join(', ') : 'None'}</dd></div>
             </dl>
           </CardContent>
         </Card>
@@ -363,7 +540,7 @@ export function SettingsPage() {
 
       <Card>
         <CardHeader><h2 className="text-lg font-semibold">Preferences</h2></CardHeader>
-        <CardContent className="grid gap-3 sm:grid-cols-4">
+        <CardContent className="grid gap-3 sm:grid-cols-6">
           <div>
             <Label htmlFor="settings-pref-language">Language</Label>
             <Select id="settings-pref-language" value={preferenceForm.language} onChange={(event) => setPreferenceForm((current) => ({ ...current, language: event.target.value }))}>
@@ -380,16 +557,26 @@ export function SettingsPage() {
           <div>
             <Label htmlFor="settings-pref-style">Content style</Label>
             <Select id="settings-pref-style" value={preferenceForm.contentStyle} onChange={(event) => setPreferenceForm((current) => ({ ...current, contentStyle: event.target.value }))}>
-              <option value="html">HTML</option>
-              <option value="plain">Plain</option>
+              <option value="short">Short</option>
+              <option value="detailed">Detailed</option>
               <option value="summary+link">Summary + link</option>
+              <option value="rich">Rich</option>
             </Select>
           </div>
           <div>
             <Label htmlFor="settings-pref-summary-max">Summary max length</Label>
             <Input id="settings-pref-summary-max" type="number" min="80" max="2000" value={preferenceForm.summaryMaxChars} onChange={(event) => setPreferenceForm((current) => ({ ...current, summaryMaxChars: event.target.value }))} />
           </div>
-          <div className="sm:col-span-4 flex justify-end">
+          <div>
+            <Label htmlFor="settings-pref-timezone">Timezone</Label>
+            <Input id="settings-pref-timezone" value={preferenceForm.timezone} onChange={(event) => setPreferenceForm((current) => ({ ...current, timezone: event.target.value }))} />
+          </div>
+          <div>
+            <Label htmlFor="settings-pref-keywords">Keywords</Label>
+            <Input id="settings-pref-keywords" value={preferenceForm.keywords} onChange={(event) => setPreferenceForm((current) => ({ ...current, keywords: event.target.value }))} />
+          </div>
+          <div className="sm:col-span-6 flex justify-end gap-2">
+            <Button variant="secondary" onClick={() => void deletePreferences()} disabled={loading}>Delete preferences</Button>
             <Button onClick={() => void savePreferences()} disabled={loading}>Save preferences</Button>
           </div>
         </CardContent>
@@ -452,18 +639,9 @@ export function SettingsPage() {
               <div key={k}><dt className="font-medium text-muted-foreground">{k}</dt><dd>{SECRET_PATTERNS.test(k) ? '****' : String(v ?? 'N/A')}</dd></div>
             ))}
           </dl>
-          <SettingsPanel
-            groups={groups}
-            onSave={saveSetting}
-            onExport={() => setStatus('Export is not yet wired for notification-agent.')}
-            onImport={() => setStatus('Import is not yet wired for notification-agent.')}
-          />
           <div className="flex flex-wrap justify-end gap-2">
             <Button variant="secondary" onClick={() => void loadSettings()} disabled={loading}>
               Reload settings
-            </Button>
-            <Button onClick={() => void persistSettings()} disabled={loading}>
-              Save settings
             </Button>
           </div>
         </CardContent>
@@ -490,6 +668,7 @@ export function SettingsPage() {
           </Button>
         </CardContent>
       </Card>
+      </SettingsPanel>
     </div>
   );
 }

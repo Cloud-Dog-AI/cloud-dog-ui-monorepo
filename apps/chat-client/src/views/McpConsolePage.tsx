@@ -13,52 +13,70 @@
 // limitations under the License.
 
 import * as React from "react";
-import { Badge, McpConsole, Card, CardContent, CardHeader } from "@cloud-dog/ui";
-import { useConfig } from "@cloud-dog/config";
+import { useAuth } from "@cloud-dog/auth";
+import {
+  Ps72McpConsole,
+  type Ps72ExecuteResult,
+  type Ps72HealthState,
+  type Ps72McpTool,
+} from "@cloud-dog/ui";
+import { useConfig } from "../lib/runtime-config";
 import { useAppState } from "../state/AppState";
 
 type RuntimeConfig = {
   MCP_BASE_URL: string;
-  API_KEY_HEADER?: string;
   AUTH_MODE?: "cookie" | "api_key" | "oidc";
 };
 
-type RpcTool = { name: string; description?: string; inputSchema?: unknown };
+type RpcTool = { name: string; description?: string; inputSchema?: unknown; input_schema?: unknown; bound?: boolean };
+type RpcPayload = { id?: string | number; result?: { tools?: RpcTool[] } | unknown; error?: { message?: string } | unknown };
 
 export function McpConsolePage() {
   const cfg = useConfig<RuntimeConfig>();
+  const auth = useAuth();
   const { apiKey, apiKeyHeader } = useAppState();
-  const [tools, setTools] = React.useState<RpcTool[]>([]);
+  const [tools, setTools] = React.useState<Ps72McpTool[]>([]);
+  const [health, setHealth] = React.useState<Ps72HealthState>("unknown");
   const [error, setError] = React.useState<string | null>(null);
 
-  const rpcHeaders = React.useMemo(() => {
+  const rpcHeaders = React.useCallback((overrideKey?: string) => {
     const headers: Record<string, string> = { "Content-Type": "application/json" };
-    if (apiKey.trim()) headers[apiKeyHeader || cfg.API_KEY_HEADER || "X-API-Key"] = apiKey.trim();
+    const key = overrideKey?.trim() || apiKey.trim();
+    if (key) headers[apiKeyHeader || "X-API-Key"] = key;
     return headers;
-  }, [apiKey, apiKeyHeader, cfg.API_KEY_HEADER]);
+  }, [apiKey, apiKeyHeader]);
 
-  const callRpc = React.useCallback(async (method: string, params: Record<string, unknown> = {}) => {
+  const callRpc = React.useCallback(async (method: string, params: Record<string, unknown> = {}, overrideKey?: string) => {
     const response = await fetch(cfg.MCP_BASE_URL, {
       method: "POST",
       credentials: "include",
-      headers: rpcHeaders,
+      headers: rpcHeaders(overrideKey),
       body: JSON.stringify({ jsonrpc: "2.0", id: Date.now(), method, params }),
     });
-    const payload = await response.json();
-    if (!response.ok || payload.error) {
-      throw new Error(String(payload?.error?.message || response.statusText || "MCP request failed"));
-    }
-    return payload.result;
+    const payload = await response.json().catch(() => ({ error: { message: "Invalid JSON response" } })) as RpcPayload;
+    return { response, payload };
   }, [cfg.MCP_BASE_URL, rpcHeaders]);
 
   const loadTools = React.useCallback(async () => {
     setError(null);
     try {
-      const result = await callRpc("tools/list");
-      setTools(Array.isArray(result?.tools) ? result.tools : []);
+      const { response, payload } = await callRpc("tools/list");
+      if (!response.ok || payload.error) {
+        throw new Error(String((payload.error as { message?: string } | undefined)?.message || response.statusText || "MCP request failed"));
+      }
+      const result = payload.result as { tools?: RpcTool[] } | undefined;
+      const list = Array.isArray(result?.tools) ? result.tools : [];
+      setTools(list.map((tool) => ({
+        name: tool.name,
+        description: tool.description,
+        inputSchema: tool.inputSchema ?? tool.input_schema,
+        bound: tool.bound,
+      })));
+      setHealth(list.length > 0 ? "healthy" : "degraded");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load MCP tools");
       setTools([]);
+      setHealth("unhealthy");
     }
   }, [callRpc]);
 
@@ -67,39 +85,34 @@ export function McpConsolePage() {
   }, [loadTools]);
 
   const authMode = cfg.AUTH_MODE ?? (apiKey.trim() ? "api_key" : "cookie");
+  const hasBoundKey = authMode === "api_key" ? Boolean(apiKey.trim()) : auth.isAuthenticated;
+  const boundLabel = authMode === "api_key"
+    ? apiKey.trim() ? `••••${apiKey.trim().slice(-4)}` : "no bound key"
+    : auth.isAuthenticated ? "session • cookie" : "not signed in";
 
   return (
-    <div className="space-y-6">
-      {/* PS-72 MW4: Auth display */}
-      <Card>
-        <CardHeader>
-          <div className="flex items-center gap-2">
-            <h2 className="text-lg font-semibold">Authentication</h2>
-            <Badge variant="default" className="bg-emerald-600 text-white border-emerald-700">{authMode}</Badge>
-          </div>
-        </CardHeader>
-        <CardContent>
-          <p className="text-sm text-muted-foreground">
-            MCP endpoint: <code className="text-xs">{cfg.MCP_BASE_URL}</code>
-            {authMode === "api_key" ? ` — Key header: ${apiKeyHeader || cfg.API_KEY_HEADER || "X-API-Key"}` : " — Session cookie auth"}
-          </p>
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader>
-          <h1 className="text-xl font-semibold">MCP Console</h1>
-          <p className="text-sm text-muted-foreground">Test the chat-client MCP surface through the shared console component.</p>
-        </CardHeader>
-        <CardContent className="space-y-3">
-        <McpConsole
-          endpointUrl={cfg.MCP_BASE_URL}
-          tools={tools}
-          onExecute={(toolName, args) => callRpc("tools/call", { name: toolName, arguments: args })}
-        />
-        {error ? <p role="alert" className="text-sm text-destructive">{error}</p> : null}
-      </CardContent>
-    </Card>
+    <div className="space-y-3">
+      {error ? <p role="alert" className="text-sm text-destructive">{error}</p> : null}
+      <Ps72McpConsole
+        endpointUrl={cfg.MCP_BASE_URL}
+        tools={tools}
+        health={health}
+        hasBoundKey={hasBoundKey}
+        boundLabel={boundLabel}
+        docsHref="/api-docs"
+        jobsHref="/jobs"
+        onExecute={async (toolName, args, overrideKey): Promise<Ps72ExecuteResult> => {
+          const { response, payload } = await callRpc("tools/call", { name: toolName, arguments: args }, overrideKey);
+          const denied = !response.ok || Boolean(payload.error);
+          return {
+            body: payload,
+            correlationId: response.headers.get("X-Correlation-Id") ?? response.headers.get("x-correlation-id"),
+            requestId: response.headers.get("X-Request-Id") ?? response.headers.get("x-request-id") ?? (payload.id ? String(payload.id) : null),
+            httpStatus: response.status,
+            denied,
+          };
+        }}
+      />
     </div>
   );
 }

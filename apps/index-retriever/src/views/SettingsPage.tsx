@@ -1,161 +1,195 @@
 // Copyright 2026 Cloud-Dog, Viewdeck Engineering Limited
 // Licensed under the Apache License, Version 2.0
-// PS-73 Settings Page WebUI Standard — index-retriever implementation.
+// PS-73 Settings Page WebUI Standard - index-retriever implementation.
 
 import * as React from "react";
-import { Badge, Button, Card, CardContent, CardHeader, CodeEditor, Input, JsonExplorer, SettingsPanel, type SettingGroupDef } from "@cloud-dog/ui";
+import { SettingsPanel, type JsonExplorerSourceMap, type SettingsPanelServerTab } from "@cloud-dog/ui";
 import { useConfig } from "@cloud-dog/config";
 import { useIndexRetrieverState } from "../state/AppState";
+import {
+  SETTINGS_DEFAULT_CONFIG,
+  SETTINGS_INVENTORY,
+  SETTINGS_LEAF_KEY_PATHS,
+  SETTINGS_SECRET_KEY_PATHS,
+  SETTINGS_SOURCE_MAP,
+} from "../data/settingsInventory";
 
-/** SW4: Mask secrets in config objects before display or export. */
-function maskSecrets(obj: unknown): unknown {
-  if (obj === null || obj === undefined || typeof obj === "string") return obj;
-  if (Array.isArray(obj)) return obj.map(maskSecrets);
-  if (typeof obj === "object") {
-    const masked: Record<string, unknown> = {};
-    for (const [k, v] of Object.entries(obj as Record<string, unknown>)) {
-      const l = k.toLowerCase();
-      if ((l.includes("password") || l.includes("secret") || l.includes("token") || l.includes("api_key") || l.includes("apikey") || l.includes("key_hash") || l.includes("credential")) && typeof v === "string" && v.length > 0) {
-        masked[k] = "****";
-      } else if (typeof v === "string" && (l.includes("uri") || l.includes("url") || l.includes("connection")) && v.includes("@")) {
-        masked[k] = v.replace(/:([^:@]+)@/, ":****@");
-      } else {
-        masked[k] = maskSecrets(v);
-      }
-    }
-    return masked;
-  }
-  return obj;
-}
+const MASK_TOKEN = "--------";
+const SERVER_TABS = ["all", "api", "mcp", "a2a", "webui"] as const;
+type ServerTab = (typeof SERVER_TABS)[number];
+type ServerScope = "API" | "MCP" | "A2A" | "WebUI" | "shared";
 
-function asRecord(value: unknown): Record<string, unknown> {
-  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
-}
+const SERVER_LABEL: Record<Exclude<ServerTab, "all">, Exclude<ServerScope, "shared">> = {
+  api: "API",
+  mcp: "MCP",
+  a2a: "A2A",
+  webui: "WebUI",
+};
 
-function pickSection(source: Record<string, unknown>, keys: string[]): Record<string, unknown> {
-  const section: Record<string, unknown> = {};
-  for (const key of keys) {
-    const value = source[key];
-    if (value !== undefined) section[key] = value;
-  }
-  return section;
-}
+const SERVER_TOP_LEVEL: Record<Exclude<ServerScope, "shared">, string[]> = {
+  API: ["api_server"],
+  MCP: ["mcp_server"],
+  A2A: ["a2a_server"],
+  WebUI: ["web_server", "web_login"],
+};
 
 type RuntimeConfig = Readonly<{
   API_BASE_URL: string;
   AUTH_MODE?: string;
   APP_VERSION?: string;
-  DEFAULT_PROFILE?: string;
-  DEFAULT_COLLECTION?: string;
-  MCP_BASE_URL?: string;
-  A2A_BASE_URL?: string;
-  SESSION_TIMEOUT_MINUTES?: number;
 }>;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function cloneRecord(value: Record<string, unknown>): Record<string, unknown> {
+  return JSON.parse(JSON.stringify(value)) as Record<string, unknown>;
+}
+
+function deepMergeDefaults(defaults: unknown, runtime: unknown): unknown {
+  if (Array.isArray(defaults)) return Array.isArray(runtime) ? runtime : defaults;
+  if (!isRecord(defaults)) return runtime === undefined || runtime === null ? defaults : runtime;
+  const out: Record<string, unknown> = {};
+  const runtimeRecord = isRecord(runtime) ? runtime : {};
+  for (const [key, defaultValue] of Object.entries(defaults)) {
+    out[key] = deepMergeDefaults(defaultValue, runtimeRecord[key]);
+  }
+  return out;
+}
+
+function rootScope(rootKey: string): ServerScope {
+  if (SERVER_TOP_LEVEL.API.includes(rootKey)) return "API";
+  if (SERVER_TOP_LEVEL.MCP.includes(rootKey)) return "MCP";
+  if (SERVER_TOP_LEVEL.A2A.includes(rootKey)) return "A2A";
+  if (SERVER_TOP_LEVEL.WebUI.includes(rootKey)) return "WebUI";
+  return "shared";
+}
+
+function groupLabel(scope: ServerScope): string {
+  return scope === "shared" ? "Shared" : scope;
+}
+
+function groupedConfig(config: Record<string, unknown>, tab: ServerTab): Record<string, unknown> {
+  const grouped: Record<string, Record<string, unknown>> = {
+    API: {},
+    MCP: {},
+    A2A: {},
+    WebUI: {},
+    Shared: {},
+  };
+
+  for (const [key, value] of Object.entries(config)) {
+    const scope = rootScope(key);
+    grouped[groupLabel(scope)][key] = value;
+  }
+
+  if (tab !== "all") {
+    const label = SERVER_LABEL[tab];
+    return { [label]: grouped[label] };
+  }
+
+  return {
+    API: grouped.API,
+    MCP: grouped.MCP,
+    A2A: grouped.A2A,
+    WebUI: grouped.WebUI,
+    Shared: grouped.Shared,
+  };
+}
+
+function groupPath(path: string): string {
+  const root = path.split(/[.[\]]/, 1)[0] ?? path;
+  return `${groupLabel(rootScope(root))}.${path}`;
+}
+
+function groupedSources(tab: ServerTab): JsonExplorerSourceMap {
+  const out: Record<string, JsonExplorerSourceMap[string]> = {};
+  for (const [path, meta] of Object.entries(SETTINGS_SOURCE_MAP)) {
+    const groupedPath = groupPath(path);
+    if (tab !== "all" && !groupedPath.startsWith(`${SERVER_LABEL[tab]}.`)) continue;
+    out[groupedPath] = meta;
+  }
+  return out;
+}
+
+function maskedForExport(value: unknown, sourceMap: JsonExplorerSourceMap, path = ""): unknown {
+  const meta = path ? sourceMap[path] : undefined;
+  if (meta?.secret) return MASK_TOKEN;
+  if (Array.isArray(value)) return value.map((item, index) => maskedForExport(item, sourceMap, `${path}[${index}]`));
+  if (isRecord(value)) {
+    const out: Record<string, unknown> = {};
+    for (const [key, item] of Object.entries(value)) {
+      out[key] = maskedForExport(item, sourceMap, path ? `${path}.${key}` : key);
+    }
+    return out;
+  }
+  return value;
+}
+
+function downloadJson(filename: string, value: unknown) {
+  const blob = new Blob([JSON.stringify(value, null, 2)], { type: "application/json" });
+  const href = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = href;
+  link.download = filename;
+  link.click();
+  URL.revokeObjectURL(href);
+}
 
 export function SettingsPage() {
   const cfg = useConfig<RuntimeConfig>();
   const app = useIndexRetrieverState();
   const { api } = app;
-
-  const [draft, setDraft] = React.useState<Record<string, unknown>>({
-    API_BASE_URL: cfg.API_BASE_URL,
-    AUTH_MODE: cfg.AUTH_MODE ?? "api_key",
-    APP_VERSION: cfg.APP_VERSION ?? "dev",
-    DEFAULT_PROFILE: cfg.DEFAULT_PROFILE ?? "default",
-    DEFAULT_COLLECTION: cfg.DEFAULT_COLLECTION ?? "",
-    MCP_BASE_URL: cfg.MCP_BASE_URL ?? `${window.location.origin}/mcp`,
-    A2A_BASE_URL: cfg.A2A_BASE_URL ?? `${window.location.origin}/a2a`,
-    SESSION_TIMEOUT_MINUTES: cfg.SESSION_TIMEOUT_MINUTES ?? 30,
-  });
+  const [activeServer, setActiveServer] = React.useState<ServerTab>("all");
+  const [searchTerm, setSearchTerm] = React.useState("");
+  const [runtimeConfig, setRuntimeConfig] = React.useState<Record<string, unknown>>({});
+  const [healthOk, setHealthOk] = React.useState(false);
   const [status, setStatus] = React.useState("");
   const [error, setError] = React.useState<string | null>(null);
-  const [importedConfig, setImportedConfig] = React.useState<unknown>(null);
-  const [runtimeConfig, setRuntimeConfig] = React.useState<Record<string, unknown>>({});
-  const [healthData, setHealthData] = React.useState<Record<string, unknown> | null>(null);
-  const [healthOk, setHealthOk] = React.useState(false);
-  const [editorValue, setEditorValue] = React.useState("");
-  const fileInputRef = React.useRef<HTMLInputElement>(null);
 
-  // Fetch health on mount
   React.useEffect(() => {
-    api.getHealth().then((h) => { setHealthData(h as Record<string, unknown>); setHealthOk(String((h as Record<string, unknown>).status) === "ok"); }).catch(() => {});
+    api.getHealth()
+      .then((health) => setHealthOk(String((health as Record<string, unknown>).status) === "ok"))
+      .catch(() => setHealthOk(false));
   }, [api]);
 
   React.useEffect(() => {
-    api.getConfig().then(setRuntimeConfig).catch(() => setRuntimeConfig({}));
+    api.getConfig()
+      .then((config) => setRuntimeConfig(isRecord(config) ? config : {}))
+      .catch(() => setRuntimeConfig({}));
   }, [api]);
 
-  const currentConfig = React.useMemo(
-    () => maskSecrets(importedConfig ?? (Object.keys(runtimeConfig).length > 0 ? runtimeConfig : draft)),
-    [draft, importedConfig, runtimeConfig]
+  const effectiveConfig = React.useMemo(
+    () => deepMergeDefaults(cloneRecord(SETTINGS_DEFAULT_CONFIG), runtimeConfig) as Record<string, unknown>,
+    [runtimeConfig],
   );
-
-  React.useEffect(() => {
-    setEditorValue(JSON.stringify(currentConfig, null, 2));
-  }, [currentConfig]);
-
-  const groups = React.useMemo<SettingGroupDef[]>(
-    () => [
-      {
-        id: "indexing",
-        label: "Indexing",
-        settings: [
-          { key: "DEFAULT_PROFILE", label: "Default profile", type: "text", value: draft.DEFAULT_PROFILE, readOnly: true, description: "Default ingest/search profile." },
-          { key: "DEFAULT_COLLECTION", label: "Default collection", type: "text", value: draft.DEFAULT_COLLECTION, readOnly: true, description: "Default ingest/search collection." },
-        ],
-      },
-      {
-        id: "build",
-        label: "Build",
-        settings: [
-          { key: "APP_VERSION", label: "App version", type: "text", value: draft.APP_VERSION, readOnly: true, description: "SPA build version." },
-        ],
-      },
-    ],
-    [draft]
+  const activeConfig = React.useMemo(() => groupedConfig(effectiveConfig, activeServer), [activeServer, effectiveConfig]);
+  const activeSources = React.useMemo(() => groupedSources(activeServer), [activeServer]);
+  const serverTabs = React.useMemo<SettingsPanelServerTab[]>(
+    () =>
+      SERVER_TABS.map((tab) => ({
+        id: tab,
+        label: tab === "all" ? "ALL" : SERVER_LABEL[tab],
+        data: groupedConfig(effectiveConfig, tab),
+        sources: groupedSources(tab),
+        description: "Index Retriever effective config",
+      })),
+    [effectiveConfig],
   );
-  const currentConfigRecord = React.useMemo(() => asRecord(currentConfig), [currentConfig]);
-  const serverSection = React.useMemo(
-    () => pickSection(currentConfigRecord, ["api_server", "web_server", "mcp_server", "a2a_server"]),
-    [currentConfigRecord],
-  );
-  const authSection = React.useMemo(
-    () => pickSection(currentConfigRecord, ["auth", "rbac", "web_login"]),
-    [currentConfigRecord],
-  );
-  const storageSection = React.useMemo(
-    () => ({
-      storage: currentConfigRecord.storage,
-      queue: currentConfigRecord.queue,
-      profile_defaults: asRecord(currentConfigRecord.profiles).default ?? currentConfigRecord.profiles,
-    }),
-    [currentConfigRecord],
-  );
-  const loggingSection = React.useMemo(
-    () => ({
-      audit: asRecord(currentConfigRecord.storage).audit,
-      log: currentConfigRecord.log,
-    }),
-    [currentConfigRecord],
-  );
-  const runtimeLogSection = React.useMemo(
-    () => asRecord(currentConfigRecord.log),
-    [currentConfigRecord],
-  );
-  const runtimeQueueSection = React.useMemo(
-    () => asRecord(currentConfigRecord.queue),
-    [currentConfigRecord],
-  );
+  const secretPaths = React.useMemo(() => SETTINGS_SECRET_KEY_PATHS.map((path) => groupPath(path)), []);
+  const visibleLeafCount = activeServer === "all" ? SETTINGS_INVENTORY.rendered_leaf_total : SETTINGS_LEAF_KEY_PATHS.filter((path) => groupPath(path).startsWith(`${SERVER_LABEL[activeServer]}.`)).length;
+  const isAdmin = app.roles.includes("admin");
 
   const runHealthCheck = async () => {
     setError(null);
     setStatus("");
     try {
       const health = await api.getHealth();
-      setHealthData(health as Record<string, unknown>);
-      setHealthOk(String((health as Record<string, unknown>).status) === "ok");
-      setStatus(`Health check passed (${(health as Record<string, unknown>).status}).`);
-      app.recordActivity("settings.health_check", "ok", String((health as Record<string, unknown>).status));
+      const ok = String((health as Record<string, unknown>).status) === "ok";
+      setHealthOk(ok);
+      setStatus(`Health check ${ok ? "passed" : "returned non-ok"}: ${(health as Record<string, unknown>).status ?? "unknown"}`);
+      app.recordActivity("settings.health_check", ok ? "ok" : "error", String((health as Record<string, unknown>).status ?? "unknown"));
     } catch (healthError) {
       setHealthOk(false);
       const message = app.captureFailure(healthError);
@@ -164,153 +198,47 @@ export function SettingsPage() {
     }
   };
 
-  const exportConfig = () => {
-    const blob = new Blob([JSON.stringify(maskSecrets(draft), null, 2)], { type: "application/json" });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = "index-retriever-runtime-settings.json";
-    link.click();
-    URL.revokeObjectURL(url);
-    setStatus("Exported runtime settings JSON (secrets masked).");
+  const recordRevealAudit = () => {
+    const actor = app.userId || "admin";
+    const line = `AU-3 actor=${actor} action=settings.secret_reveal_toggle count=${secretPaths.length} result=recorded`;
+    setStatus(line);
+    app.recordActivity("settings.secret_reveal_toggle", "ok", line);
+  };
+
+  const exportEffectiveConfig = () => {
+    downloadJson("index-retriever-effective-config.json", maskedForExport(activeConfig, activeSources));
+    setStatus("Exported masked effective config.");
+    app.recordActivity("settings.export_effective_config", "ok", activeServer);
   };
 
   return (
-    <div className="space-y-6">
-      <header>
-        <h1 className="text-2xl font-semibold">Settings</h1>
-        <p className="text-sm text-muted-foreground">Runtime configuration display (PS-73) and system checks.</p>
-      </header>
-
-      {error ? <p role="alert" className="text-sm text-destructive">{error}</p> : null}
-      {status ? <p role="status" className="text-sm text-foreground/80">{status}</p> : null}
-
-      {/* PS-73 SW2.1: Service Info */}
-      <Card>
-        <CardHeader><h2 className="text-lg font-semibold">Service Info</h2></CardHeader>
-        <CardContent>
-          <JsonExplorer
-            data={maskSecrets({
-              service: "index-retriever-mcp-server",
-              version: draft.APP_VERSION ?? "unknown",
-              environment: runtimeLogSection.environment ?? runtimeQueueSection.server_id ?? "unknown",
-              default_profile: draft.DEFAULT_PROFILE,
-              default_collection: draft.DEFAULT_COLLECTION,
-              api_base_url: draft.API_BASE_URL,
-            })}
-            defaultExpanded
-          />
-        </CardContent>
-      </Card>
-
-      {/* PS-73 SW2.2: Server */}
-      <Card>
-        <CardHeader><h2 className="text-lg font-semibold">Server</h2></CardHeader>
-        <CardContent>
-          <JsonExplorer data={serverSection} defaultExpanded />
-        </CardContent>
-      </Card>
-
-      {/* PS-73 SW2.3: Auth */}
-      <Card>
-        <CardHeader><h2 className="text-lg font-semibold">Auth</h2></CardHeader>
-        <CardContent>
-          <JsonExplorer data={maskSecrets(authSection)} defaultExpanded />
-        </CardContent>
-      </Card>
-
-      {/* PS-73 SW2.4: Storage / Backend */}
-      <Card>
-        <CardHeader><h2 className="text-lg font-semibold">Storage / Backend</h2></CardHeader>
-        <CardContent>
-          <JsonExplorer data={maskSecrets(storageSection)} defaultExpanded />
-        </CardContent>
-      </Card>
-
-      {/* PS-73 SW2.5: Logging */}
-      <Card>
-        <CardHeader><h2 className="text-lg font-semibold">Logging</h2></CardHeader>
-        <CardContent>
-          <JsonExplorer data={maskSecrets(loggingSection)} defaultExpanded />
-        </CardContent>
-      </Card>
-
-      {/* PS-73 SW2.6: Service-Specific */}
-      <Card>
-        <CardHeader><h2 className="text-lg font-semibold">Service-Specific</h2></CardHeader>
-        <CardContent>
-          <JsonExplorer data={currentConfig} defaultExpanded />
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader><h2 className="text-lg font-semibold">Configuration JSON Editor</h2></CardHeader>
-        <CardContent className="space-y-3">
-          <CodeEditor value={editorValue} onChange={setEditorValue} language="json" height={320} />
-          <div className="flex gap-2">
-            <Button
-              variant="secondary"
-              onClick={() => {
-                try {
-                  setImportedConfig(JSON.parse(editorValue));
-                  setStatus("Applied configuration editor preview.");
-                } catch (parseError) {
-                  setError(app.captureFailure(parseError));
-                }
-              }}
-            >
-              Apply Preview
-            </Button>
-            <Button variant="secondary" onClick={() => setEditorValue(JSON.stringify(currentConfig, null, 2))}>
-              Reset Editor
-            </Button>
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* PS-73 SW2.7: Health */}
-      <Card>
-        <CardHeader>
-          <div className="flex items-center gap-2">
-            <h2 className="text-lg font-semibold">Health</h2>
-            <Badge variant={healthOk ? "default" : "destructive"} className={healthOk ? "bg-emerald-600 text-white border-emerald-700" : ""}>{healthOk ? "ok" : "unknown"}</Badge>
-          </div>
-        </CardHeader>
-        <CardContent className="space-y-2">
-          <JsonExplorer data={maskSecrets(healthData ?? { status: "loading" })} defaultExpanded />
-          <Button onClick={() => void runHealthCheck()}>Refresh Health</Button>
-        </CardContent>
-      </Card>
-
-      {/* User Preferences (preserved) */}
-      <Card>
-        <CardHeader><h2 className="text-lg font-semibold">User Preferences</h2></CardHeader>
-        <CardContent>
-          <SettingsPanel
-            groups={groups}
-            onSave={(key, value) => { setDraft((current) => ({ ...current, [key]: value })); setStatus(`Updated ${key}`); }}
-            onExport={exportConfig}
-            onImport={() => fileInputRef.current?.click()}
-          />
-        </CardContent>
-      </Card>
-
-      <Input
-        ref={fileInputRef}
-        type="file"
-        accept="application/json"
-        className="sr-only"
-        onChange={async (event) => {
-          const file = event.target.files?.[0];
-          if (!file) return;
-          try {
-            const text = await file.text();
-            setImportedConfig(JSON.parse(text));
-            setStatus(`Imported ${file.name}`);
-          } catch (loadError) {
-            setError(app.captureFailure(loadError));
-          }
-        }}
+    <div className="space-y-6" data-testid="settings-page-root">
+      <SettingsPanel
+        title="Settings"
+        serviceName="index-retriever"
+        version={cfg.APP_VERSION ?? "dev"}
+        description={`PS-73 effective configuration. ${visibleLeafCount} visible leaves, ${SETTINGS_INVENTORY.secret_total} secret leaves masked by default.`}
+        statusItems={[
+          { label: healthOk ? "health ok" : "health unknown", variant: healthOk ? "default" : "destructive" },
+        ]}
+        serverTabs={serverTabs}
+        activeServerId={activeServer}
+        onActiveServerChange={(serverId) => setActiveServer(serverId as ServerTab)}
+        searchTerm={searchTerm}
+        onSearchTermChange={setSearchTerm}
+        maxDepth={18}
+        error={error}
+        canRevealSecrets={isAdmin}
+        onRevealSecrets={recordRevealAudit}
+        revealSecretsLabel="Reveal audit"
+        canExport={isAdmin}
+        onExport={exportEffectiveConfig}
+        onRefresh={() => void runHealthCheck()}
+        footer={status ? (
+          <p role="status" data-testid="settings-secret-reveal-audit" className="font-mono text-xs text-foreground/80">
+            {status}
+          </p>
+        ) : null}
       />
     </div>
   );

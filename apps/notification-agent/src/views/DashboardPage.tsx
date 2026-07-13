@@ -16,19 +16,13 @@
 // Covers: FR1.27, FR1.31, FR1.32, FR1.33, UI-R23, W28A-644
 
 import * as React from 'react';
-import { Button, Card, CardContent, CardHeader, DataTable, HealthWidget, MetricCard, RelativeTime } from '@cloud-dog/ui';
+import { Card, CardContent, CardHeader, DataTable, MetricCard, createDataTableActionColumn } from '@cloud-dog/ui';
 import type { DataColumn } from '@cloud-dog/ui';
-import type { HealthStatus } from '@cloud-dog/ui';
-import { CopyrightFooter, DashboardLayout, VersionInfo } from '@cloud-dog/shell';
-import { useConfig } from '@cloud-dog/config';
+import { DashboardLayout, VersionInfo } from '@cloud-dog/shell';
+import { Activity, MessageSquare } from 'lucide-react';
 import { useNotificationAgentState } from '../state/AppState';
+import { LogTablePanel } from './LogTablePanel';
 import type { RuntimeHealth, RuntimeStatus } from '../lib/api';
-
-type RuntimeConfig = Readonly<{
-  API_BASE_URL: string;
-  MCP_BASE_URL?: string;
-  A2A_BASE_URL?: string;
-}>;
 
 type ChannelDeliveryBreakdown = Readonly<{
   channel: string;
@@ -68,7 +62,7 @@ const UI_BUILD_VERSION = importMetaEnv.VITE_APP_VERSION
 
 function displayVersion(version: string | null | undefined): string {
   const value = String(version ?? '').trim();
-  if (!value) return UI_BUILD_VERSION;
+  if (!value || value === '0.1.0') return UI_BUILD_VERSION;
   return value;
 }
 
@@ -81,19 +75,9 @@ function isFailedDelivery(state: string | null | undefined): boolean {
 }
 
 export function DashboardPage() {
-  const cfg = useConfig<RuntimeConfig>();
   const { api, latestFailure, captureFailure, clearFailure } = useNotificationAgentState();
   const [snapshot, setSnapshot] = React.useState<DashboardSnapshot | null>(null);
   const [status, setStatus] = React.useState('Loading dashboard data…');
-  const [serviceState, setServiceState] = React.useState<{
-    api: HealthStatus;
-    mcp: HealthStatus;
-    a2a: HealthStatus;
-  }>({
-    api: 'unknown' as const,
-    mcp: 'unknown' as const,
-    a2a: 'unknown' as const,
-  });
   const [channelPage, setChannelPage] = React.useState(1);
   const [channelPageSize, setChannelPageSize] = React.useState(5);
 
@@ -112,13 +96,6 @@ export function DashboardPage() {
         api.listJobs(100),
         api.getStatus(),
         api.getHealth(),
-      ]);
-
-      const mcpBase = cfg.MCP_BASE_URL || '';
-      const a2aBase = cfg.A2A_BASE_URL || '';
-      const [mcpHealth, a2aHealth] = await Promise.all([
-        mcpBase ? fetch(`${mcpBase}/health`, { credentials: 'same-origin' }).then((response) => response.ok).catch(() => false) : Promise.resolve(false),
-        a2aBase ? fetch(`${a2aBase}/health`, { credentials: 'same-origin' }).then((response) => response.ok).catch(() => false) : Promise.resolve(false),
       ]);
 
       setSnapshot({
@@ -157,17 +134,13 @@ export function DashboardPage() {
           })
           .sort((left, right) => right.total - left.total || left.channel.localeCompare(right.channel)),
       });
-      setServiceState({
-        api: health.status === 'ok' ? 'ok' : 'error',
-        mcp: mcpHealth ? 'ok' : 'warning',
-        a2a: a2aHealth ? 'ok' : 'warning',
-      });
-      setStatus(`Dashboard updated at ${runtimeStatus.timestamp ?? new Date().toISOString()}.`);
+      // CX-170: no raw ISO timestamps in operator-facing copy.
+      setStatus('Dashboard updated.');
     } catch (error) {
       setStatus('');
       captureFailure(error);
     }
-  }, [api, captureFailure, cfg.A2A_BASE_URL, cfg.API_BASE_URL, cfg.MCP_BASE_URL, clearFailure]);
+  }, [api, captureFailure, clearFailure]);
 
   React.useEffect(() => {
     void refresh();
@@ -196,8 +169,8 @@ export function DashboardPage() {
       cell: (row) => row.enabled,
     },
     {
-      id: 'delivered',
-      header: 'Delivered',
+      id: 'sent',
+      header: 'Sent',
       sortable: true,
       sortValue: (row) => row.delivered,
       cell: (row) => String(row.delivered),
@@ -218,11 +191,28 @@ export function DashboardPage() {
     },
     {
       id: 'successRate',
-      header: 'Success rate',
+      header: 'Success %',
       sortable: true,
       sortValue: (row) => row.successRate ?? -1,
       cell: (row) => row.successRate == null ? 'N/A' : `${row.successRate}%`,
     },
+    // NA-D-07 / NA-D-08: deep-link row actions for Audit & Log (channel-filtered) and Messages (channel-filtered).
+    createDataTableActionColumn<ChannelDeliveryBreakdown>((row) => [
+      {
+        id: 'messages',
+        label: 'Messages',
+        icon: <MessageSquare className="h-4 w-4" />,
+        href: () => `/messages?channel=${encodeURIComponent(row.channel)}`,
+        title: () => `View messages for channel ${row.channel}`,
+      },
+      {
+        id: 'log',
+        label: 'Log',
+        icon: <Activity className="h-4 w-4" />,
+        href: () => `/diagnostics-audit?query=channel:${encodeURIComponent(row.channel)}`,
+        title: () => `View Audit & Log entries for channel ${row.channel}`,
+      },
+    ]),
   ], []);
 
   return (
@@ -233,33 +223,58 @@ export function DashboardPage() {
           <VersionInfo version={displayVersion(snapshot?.health?.version)} />
         </div>
         <p className="text-sm text-muted-foreground">Notification health, queue state and recent operational activity.</p>
+        {/* NA-D-04: explain how the queue depth and pending deliveries reconcile. */}
+        <p className="text-xs text-muted-foreground">
+          Queue depth counts queued and in-flight deliveries (one message may fan-out into several). The per-channel breakdown below shows pending deliveries by channel.
+          Session timeout status is placed in the standard footer.
+        </p>
       </header>
 
       {latestFailure ? <p role="alert" className="text-sm text-destructive">{latestFailure}</p> : null}
       {status ? <p role="status" className="text-sm text-foreground/80">{status}</p> : null}
 
+      {/* CX-180: API/MCP/A2A service status is shown once, in the top-right
+          ServiceStatusBar cluster only. The dashboard body no longer duplicates
+          it (healthWidgets omitted); business metrics remain below. */}
       <DashboardLayout
-        healthWidgets={
-          <>
-            <HealthWidget name="API" status={serviceState.api} detail={snapshot?.health?.status ?? 'N/A'} url={cfg.API_BASE_URL} />
-            <HealthWidget name="MCP" status={serviceState.mcp} detail={cfg.MCP_BASE_URL || 'Not configured'} url={cfg.MCP_BASE_URL || undefined} />
-            <HealthWidget name="A2A" status={serviceState.a2a} detail={cfg.A2A_BASE_URL || 'Not configured'} url={cfg.A2A_BASE_URL || undefined} />
-          </>
-        }
         metricCards={
           <>
             <MetricCard label="Channel count" value={snapshot?.status?.channel_count ?? snapshot?.channels ?? 'N/A'} />
             <MetricCard label="Messages sent (24h)" value={snapshot?.status?.messages_sent_24h ?? snapshot?.messages ?? 'N/A'} />
             <MetricCard label="Delivery success rate" value={snapshot?.status?.delivery_success_rate ?? (snapshot?.channelBreakdown.length ? (() => { const total = snapshot.channelBreakdown.reduce((s, r) => s + r.total, 0); const delivered = snapshot.channelBreakdown.reduce((s, r) => s + r.delivered, 0); return total > 0 ? Number(((delivered / total) * 100).toFixed(1)) : 'N/A'; })() : 'N/A')} unit={snapshot?.status?.delivery_success_rate != null || (snapshot?.channelBreakdown?.length && snapshot.channelBreakdown.some((r) => r.total > 0)) ? '%' : undefined} />
-            <MetricCard label="Queue depth" value={snapshot?.status?.queue_depth ?? 'N/A'} />
+            {/* NA-D-04: queue depth counts in-flight deliveries reported by the
+                backend /status surface; this is distinct from "pending Messages"
+                because a single message can fan-out into multiple deliveries.
+                If /status doesn't supply queue_depth, fall back to summing per
+                channel pending deliveries so the number always reconciles. */}
+            <MetricCard
+              label="Queue depth (in-flight)"
+              value={snapshot?.status?.queue_depth ?? (snapshot?.channelBreakdown.reduce((s, r) => s + r.pending, 0) ?? 'N/A')}
+            />
           </>
         }
-        quickActions={
-          <Button type="button" variant="secondary" onClick={() => { window.location.href = '/messages'; }}>
-            Compose message
-          </Button>
-        }
-        recentActivity={undefined}
+        quickActions={undefined}
+        recentActivity={(
+          /* NA-D-10: shared Audit / Recent Activity widget (mirrors expert-agent dashboard). */
+          <LogTablePanel
+            api={api}
+            tableId="notification-dashboard-recent-activity"
+            title="Recent activity"
+            description="Live audit log tail (last 8 entries) — same data as Audit & Log."
+            initialSurface="audit"
+            limit={8}
+            embedded={true}
+            defaultVisibleColumns={[
+              'who',
+              'eventType',
+              'action',
+              'target',
+              'outcome',
+              'severity',
+              'timestamp',
+            ]}
+          />
+        )}
       >
         <Card>
           <CardHeader>
@@ -278,12 +293,24 @@ export function DashboardPage() {
               onPageSizeChange={setChannelPageSize}
               emptyMessage="No channel delivery data available."
               columnPickerEnabled={true}
+              selectable
+              bulkActions={[{ label: 'Export', action: 'export' }]}
+              onBulkAction={(action, selectedIds) => {
+                if (action !== 'export') return;
+                // CX-101: JSON blob-download of the selected channel breakdown rows.
+                const payload = (snapshot?.channelBreakdown ?? []).filter((row) => selectedIds.includes(row.channel));
+                const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+                const url = URL.createObjectURL(blob);
+                const link = document.createElement('a');
+                link.href = url;
+                link.download = 'notification-dashboard-channel-breakdown.json';
+                link.click();
+                URL.revokeObjectURL(url);
+              }}
             />
           </CardContent>
         </Card>
       </DashboardLayout>
-
-      <CopyrightFooter />
     </div>
   );
 }

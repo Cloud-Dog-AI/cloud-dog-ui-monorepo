@@ -15,9 +15,10 @@
 // @cloud-dog/app-git-mcp — Repository workspace diagnostics page.
 
 import * as React from "react";
-import { Badge, Button, Card, CardContent, CardHeader, DataTable, Input, JsonBlock, RelativeTime, Select, type DataColumn } from "@cloud-dog/ui";
+import { Badge, Button, Card, CardContent, CardHeader, Input, RelativeTime, Select, useAuditLink } from "@cloud-dog/ui";
+import { useNavigate } from "react-router-dom";
 import { useGitMcpState } from "../state/AppState";
-import type { OperationRecord } from "../lib/types";
+import { getSessionId } from "../lib/session";
 
 function scalarEntries(value: unknown): Array<{ key: string; value: string }> {
   if (!value || typeof value !== "object" || Array.isArray(value)) return [];
@@ -33,10 +34,13 @@ function listEntries(value: unknown): string[] {
 
 export function WorkspaceDiagnosticsPage() {
   const app = useGitMcpState();
+  const navigate = useNavigate();
+  const { linkToWorkspace } = useAuditLink();
 
   const [profile, setProfile] = React.useState(app.defaultProfile);
-  const [repoSource, setRepoSource] = React.useState(app.remoteRepoUrl);
-  const [sessionId, setSessionId] = React.useState(`ui-workspace-${Date.now()}`);
+  // GM-WS-02: repo source is DERIVED from the active profile — read-only, not free-text.
+  const repoSource = app.remoteRepoUrl;
+  // GM-WS-03: session_id is internal (per-browser-session, W28J-1302 §3.5) — never a user-facing field.
   const [refType, setRefType] = React.useState("branch");
   const [refName, setRefName] = React.useState("main");
   const [filePath, setFilePath] = React.useState("README.md");
@@ -44,16 +48,13 @@ export function WorkspaceDiagnosticsPage() {
   const [executedAt, setExecutedAt] = React.useState<string>("");
   const [status, setStatus] = React.useState("");
   const [error, setError] = React.useState<string | null>(null);
-  const [historyQuery, setHistoryQuery] = React.useState("");
-  const [historyPage, setHistoryPage] = React.useState(1);
-  const [historyPageSize, setHistoryPageSize] = React.useState(10);
 
   const openWorkspace = async () => {
     setError(null);
     const payload: Record<string, unknown> = {
       profile: profile.trim() || app.defaultProfile,
       repo_source: repoSource.trim() || app.remoteRepoUrl,
-      session_id: sessionId.trim() || `ui-workspace-${Date.now()}`,
+      session_id: getSessionId(),
       workspace_mode: "ephemeral",
     };
     if (refName.trim()) {
@@ -89,39 +90,6 @@ export function WorkspaceDiagnosticsPage() {
   const latestSummary = scalarEntries(latest);
   const latestList = listEntries((latest as Record<string, unknown> | null)?.items ?? (latest as Record<string, unknown> | null)?.branches);
 
-  const historyColumns: DataColumn<OperationRecord>[] = [
-    { id: "tool", header: "Tool", cell: (row) => row.toolName, sortable: true, sortValue: (row) => row.toolName },
-    { id: "target", header: "Target", cell: (row) => row.target.toUpperCase(), sortable: true, sortValue: (row) => row.target },
-    {
-      id: "timestamp",
-      header: "Executed",
-      cell: (row) => <RelativeTime timestamp={row.timestamp} />,
-      sortable: true,
-      sortValue: (row) => row.timestamp,
-    },
-    {
-      id: "result",
-      header: "Outcome",
-      cell: (row) => row.outcome.ok ? <Badge>Success</Badge> : <Badge variant="destructive">Failed</Badge>,
-      sortable: true,
-      sortValue: (row) => row.outcome.ok ? 1 : 0,
-    },
-  ];
-
-  React.useEffect(() => {
-    setHistoryPage(1);
-  }, [historyQuery]);
-
-  const filteredHistory = React.useMemo(() => {
-    const trimmed = historyQuery.trim().toLowerCase();
-    if (!trimmed) return app.operationHistory;
-    return app.operationHistory.filter((row) =>
-      `${row.toolName} ${row.target} ${row.timestamp} ${row.outcome.ok ? "success" : "failed"}`
-        .toLowerCase()
-        .includes(trimmed),
-    );
-  }, [app.operationHistory, historyQuery]);
-
   return (
     <div className="space-y-6">
       <header>
@@ -141,7 +109,7 @@ export function WorkspaceDiagnosticsPage() {
 
       <Card>
         <CardHeader>
-          <h2 className="text-lg font-semibold">Workspace context</h2>
+          <h2 className="text-lg font-semibold">Workspace Context</h2>
         </CardHeader>
         <CardContent className="space-y-3">
           <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
@@ -151,11 +119,8 @@ export function WorkspaceDiagnosticsPage() {
             </div>
             <div>
               <label htmlFor="workspace-repo-source" className="text-sm font-medium">Repo source</label>
-              <Input id="workspace-repo-source" value={repoSource} onChange={(event) => setRepoSource(event.target.value)} />
-            </div>
-            <div>
-              <label htmlFor="workspace-session-id" className="text-sm font-medium">Session ID</label>
-              <Input id="workspace-session-id" value={sessionId} onChange={(event) => setSessionId(event.target.value)} />
+              <Input id="workspace-repo-source" value={repoSource} readOnly aria-readonly="true" title="Derived from the selected profile" />
+              <p className="mt-1 text-xs text-muted-foreground">Derived from the selected profile.</p>
             </div>
             <div>
               <label htmlFor="workspace-ref-type" className="text-sm font-medium">Ref type</label>
@@ -193,7 +158,7 @@ export function WorkspaceDiagnosticsPage() {
       <div className="grid gap-6 xl:grid-cols-[1.25fr_0.75fr]">
         <Card>
           <CardHeader>
-            <h2 className="text-lg font-semibold">Latest diagnostics summary</h2>
+            <h2 className="text-lg font-semibold">Latest Diagnostics Summary</h2>
           </CardHeader>
           <CardContent className="space-y-4">
             {executedAt ? <RelativeTime timestamp={executedAt} /> : <p className="text-sm text-muted-foreground">No diagnostic has run yet.</p>}
@@ -217,36 +182,26 @@ export function WorkspaceDiagnosticsPage() {
             ) : null}
           </CardContent>
         </Card>
-
-        <Card>
-          <CardHeader>
-            <h2 className="text-lg font-semibold">Technical payload</h2>
-          </CardHeader>
-          <CardContent>
-            <JsonBlock title="Diagnostics" value={latest} defaultCollapsed />
-          </CardContent>
-        </Card>
       </div>
 
+      {/* GM-WS-05: workspace operations are recorded in the authoritative Audit Log — link out instead of
+          duplicating a second operations table on this page (mirrors GM-RC-02 / GM-MR-05 audit click-through). */}
       <Card>
         <CardHeader>
-          <h2 className="text-lg font-semibold">Recent workspace operations</h2>
+          <h2 className="text-lg font-semibold">Recent Workspace Operations</h2>
         </CardHeader>
         <CardContent className="space-y-3">
-          <Input className="max-w-md" value={historyQuery} onChange={(event) => setHistoryQuery(event.target.value)} placeholder="Search workspace operations..." aria-label="Search workspace operations" />
-          <DataTable
-            tableId="git-mcp.workspace-history.columns"
-            columns={historyColumns}
-            rows={filteredHistory}
-            totalRows={app.operationHistory.length}
-            getRowId={(row) => row.id}
-            emptyMessage="No workspace operations have been recorded yet."
-            page={historyPage}
-            onPageChange={setHistoryPage}
-            pageSize={historyPageSize}
-            onPageSizeChange={setHistoryPageSize}
-            columnPickerEnabled={true}
-          />
+          <p className="text-sm text-muted-foreground">
+            Workspace operations for this session are recorded in the Audit Log. Open the Audit Log to review the
+            authoritative, correlated history for the current workspace.
+          </p>
+          <Button
+            variant="secondary"
+            disabled={!app.workspaceId}
+            onClick={() => navigate(linkToWorkspace(app.workspaceId))}
+          >
+            View workspace audit
+          </Button>
         </CardContent>
       </Card>
     </div>

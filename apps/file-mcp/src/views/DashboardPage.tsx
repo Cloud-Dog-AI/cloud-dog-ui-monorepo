@@ -22,7 +22,6 @@ import {
   CardContent,
   CardHeader,
   DataTable,
-  HealthWidget,
   Input,
   MetricCard,
   QuickActionBar,
@@ -32,7 +31,7 @@ import {
   type DataColumn,
   type MetricItem,
 } from "@cloud-dog/ui";
-import { DashboardLayout, ServiceStatusBar, VersionInfo, type ServiceStatus } from "@cloud-dog/shell";
+import { DashboardLayout, VersionInfo } from "@cloud-dog/shell";
 import type { AuditEntry, BackendStatusResponse, HealthResponse, StatusResponse } from "../lib/types";
 import { useFileMcpState } from "../state/AppState";
 
@@ -56,32 +55,6 @@ function statusUrlFromApiBase(apiBaseUrl: string): string {
   return `${cleaned}/status`;
 }
 
-function serviceBase(apiBaseUrl: string): string {
-  return statusUrlFromApiBase(apiBaseUrl).replace(/\/status$/, "");
-}
-
-function toServiceStatus(
-  health: HealthResponse | null,
-  backend: BackendStatusResponse | null,
-  a2aOk: boolean | null,
-  apiBaseUrl: string,
-  mcpBaseUrl: string,
-  a2aBaseUrl: string,
-  toolCount: number
-): ServiceStatus[] {
-  const apiStatus: ServiceStatus["status"] =
-    health?.status === "ok" ? "ok" : health ? "warning" : "unknown";
-  // MCP health = whether MCP is responding with tools, independent of individual backend health.
-  const mcpStatus: ServiceStatus["status"] = toolCount > 0 ? "ok" : backend ? "warning" : "unknown";
-  const a2aStatus: ServiceStatus["status"] = a2aOk == null ? "unknown" : a2aOk ? "ok" : "error";
-
-  return [
-    { name: "API", url: `${serviceBase(apiBaseUrl)}/health`, status: apiStatus },
-    { name: "MCP", url: `${mcpBaseUrl}/health`, status: mcpStatus },
-    { name: "A2A", url: `${a2aBaseUrl}/health`, status: a2aStatus },
-  ];
-}
-
 function formatMetric(value: number | null | undefined, suffix = ""): string {
   if (typeof value !== "number" || Number.isNaN(value)) return "N/A";
   return suffix ? `${value}${suffix}` : String(value);
@@ -97,14 +70,13 @@ function formatUptime(value: number | null | undefined): string {
 
 export function DashboardPage() {
   const navigate = useNavigate();
-  const { api, auditLogPath, apiBaseUrl, mcpBaseUrl, a2aBaseUrl } = useFileMcpState();
+  const { api, auditLogPath, apiBaseUrl } = useFileMcpState();
 
   const [health, setHealth] = React.useState<HealthResponse | null>(null);
   const [backend, setBackend] = React.useState<BackendStatusResponse | null>(null);
   const [statusMetrics, setStatusMetrics] = React.useState<StatusResponse | null>(null);
   const [toolCount, setToolCount] = React.useState(0);
   const [activity, setActivity] = React.useState<AuditEntry[]>([]);
-  const [a2aOk, setA2aOk] = React.useState<boolean | null>(null);
   const [isLoading, setIsLoading] = React.useState(true);
   const [error, setError] = React.useState<string | null>(null);
   const [activityQuery, setActivityQuery] = React.useState("");
@@ -131,16 +103,6 @@ export function DashboardPage() {
       setStatusMetrics(statusResult);
       setToolCount(tools.length);
       setActivity(audit.slice(0, 50));
-      setA2aOk(null);
-      void api
-        .getA2aHealth()
-        .then((payload) => {
-          const state = String((payload as Record<string, unknown>)?.status ?? "").toLowerCase();
-          setA2aOk(state === "ok");
-        })
-        .catch(() => {
-          setA2aOk(false);
-        });
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : "Failed to load dashboard data.");
     } finally {
@@ -151,9 +113,6 @@ export function DashboardPage() {
   React.useEffect(() => {
     void load();
   }, [load]);
-
-  const services = toServiceStatus(health, backend, a2aOk, apiBaseUrl, mcpBaseUrl, a2aBaseUrl, toolCount);
-  const backendStates = backend?.states ?? {};
 
   const rows: ActivityRow[] = activity.map((entry, index) => ({
     id: `${entry.timestamp}-${entry.correlation_id ?? entry.target?.id ?? index}-${index}`,
@@ -217,7 +176,6 @@ export function DashboardPage() {
         </Button>
       </header>
 
-      <ServiceStatusBar services={services} />
       <VersionInfo version={health?.version} buildDate={health?.build_date} commitHash={health?.commit} />
 
       <Card>
@@ -256,15 +214,6 @@ export function DashboardPage() {
       ) : null}
 
       <DashboardLayout
-        healthWidgets={services.map((service) => (
-          <HealthWidget
-            key={service.name}
-            name={service.name}
-            status={service.status}
-            detail={service.url}
-            url={service.url}
-          />
-        ))}
         metricCards={
           <>
             <MetricCard label="File count" value={statusMetrics?.service_metrics.file_count ?? "N/A"} />
@@ -282,8 +231,8 @@ export function DashboardPage() {
               { label: "View audit log", onClick: () => navigate("/audit-log") },
               { label: "Manage identity", onClick: () => navigate("/admin/users") },
               { label: "Google Drive setup", onClick: () => navigate("/google-drive-settings") },
-              { label: "MCP Console", onClick: () => navigate("/mcp-console") },
-              { label: "A2A console", onClick: () => navigate("/a2a-console") },
+              { label: "MCP Console", onClick: () => navigate("/developer/mcp-console") },
+              { label: "A2A console", onClick: () => navigate("/developer/a2a-console") },
             ]}
           />
         }

@@ -18,6 +18,12 @@ import * as React from "react";
 import { cn } from "@cloud-dog/ui";
 
 export interface DashboardLayoutProps {
+  /**
+   * @deprecated CX-180 — body-level health widgets duplicate the top-right
+   * `<ServiceStatusBar>` in the shell TopBar. The prop is kept for
+   * back-compat (consumers may still pass it) but the layout no longer
+   * renders it. Use `<ServiceStatusBar>` only.
+   */
   healthWidgets?: React.ReactNode;
   metricCards?: React.ReactNode;
   quickActions?: React.ReactNode;
@@ -29,11 +35,7 @@ export interface DashboardLayoutProps {
 export function DashboardLayout(props: DashboardLayoutProps) {
   return (
     <div className={cn("flex flex-col gap-6 p-4", props.className)}>
-      {props.healthWidgets && (
-        <section aria-label="Health status">
-          <div className="flex flex-wrap gap-4">{props.healthWidgets}</div>
-        </section>
-      )}
+      {/* CX-180: body-level healthWidgets removed — status lives only in the top-right ServiceStatusBar. */}
 
       {props.metricCards && (
         <section aria-label="Key metrics">

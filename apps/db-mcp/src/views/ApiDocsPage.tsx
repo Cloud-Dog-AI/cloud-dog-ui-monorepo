@@ -11,12 +11,14 @@ import {
   CardContent,
   CardHeader,
   DataTable,
+  DocumentViewer,
   JsonBlock,
   Spinner,
   Tabs,
   TabsContent,
   TabsList,
   TabsTrigger,
+  WorkedExamplePopup,
   type DataColumn,
 } from "@cloud-dog/ui";
 import { useDbMcpState } from "../state/AppState";
@@ -34,6 +36,13 @@ type McpTool = {
 };
 
 type SkillRow = Readonly<{ name: string; description: string }>;
+
+// DM-AD-04: README markdown rendered directly by the README tab's DocumentViewer.
+// Hoisted to a module const so the README tab no longer nests a second ApiDocsPanel
+// (which collided on the default "api-docs" testId prefix and resolved to the
+// api-tab panel that has no readmeContent, showing the "not available" fallback).
+const README_MD =
+  "# db-mcp-server\n\nDatabase discovery, governance and MCP tooling.\n\n- **API surface:** REST under `/api/v1` (see the API Reference tab and Swagger UI).\n- **MCP surface:** tools listed under `/webmcp/tools` (see the MCP Reference tab and MCP Console).\n- **A2A surface:** skills on the agent card (see the A2A Reference tab and A2A Console).\n\nUse the API Reference, MCP Reference, and A2A Reference tabs for live interface documentation.";
 
 function resolveServiceOrigin(apiBaseUrl: string): string {
   const cleaned = apiBaseUrl.replace(/\/+$/, "");
@@ -77,8 +86,13 @@ function normaliseMcpTools(raw: unknown): McpTool[] {
     .filter((t) => t.name);
 }
 
-const toolColumns: DataColumn<McpTool>[] = [
-  { id: "name", header: "Tool Name", cell: (row) => <code className="text-sm">{row.name}</code>, sortable: true, sortValue: (row) => row.name },
+// W28E-610 CX-150: tool name opens the shared WorkedExamplePopup.
+const makeToolColumns = (onExample: (row: McpTool) => void): DataColumn<McpTool>[] => [
+  { id: "name", header: "Tool Name", cell: (row) => (
+      <button type="button" className="text-primary underline underline-offset-2 hover:no-underline" onClick={() => onExample(row)}>
+        <code className="text-sm">{row.name}</code>
+      </button>
+    ), sortable: true, sortValue: (row) => row.name },
   { id: "description", header: "Description", cell: (row) => row.description || "\u2014" },
   {
     id: "params",
@@ -116,11 +130,16 @@ const toolColumns: DataColumn<McpTool>[] = [
   },
 ];
 
-const skillColumns: DataColumn<SkillRow>[] = [
+// W28E-610 CX-150: skill name opens the shared WorkedExamplePopup.
+const makeSkillColumns = (onExample: (row: SkillRow) => void): DataColumn<SkillRow>[] => [
   {
     id: "name",
     header: "Skill",
-    cell: (row) => <span className="font-mono text-sm">{row.name}</span>,
+    cell: (row) => (
+      <button type="button" className="text-primary underline underline-offset-2 hover:no-underline font-mono text-sm" onClick={() => onExample(row)}>
+        {row.name}
+      </button>
+    ),
     sortable: true,
     sortValue: (row) => row.name,
   },
@@ -148,6 +167,10 @@ export function ApiDocsPage() {
   const [a2aError, setA2aError] = React.useState<string | null>(null);
   const [loading, setLoading] = React.useState(true);
   const [tab, setTab] = React.useState("api");
+  // W28E-610 CX-150: shared WorkedExamplePopup opened from a tool/skill name.
+  const [examplePopup, setExamplePopup] = React.useState<{ kind: "tool"; data: McpTool } | { kind: "skill"; data: SkillRow } | null>(null);
+  const toolColumns = React.useMemo(() => makeToolColumns((row) => setExamplePopup({ kind: "tool", data: row })), []);
+  const skillColumns = React.useMemo(() => makeSkillColumns((row) => setExamplePopup({ kind: "skill", data: row })), []);
 
   const authFetchInit = React.useMemo((): RequestInit => {
     const headers: Record<string, string> = { Accept: "application/json" };
@@ -230,19 +253,20 @@ export function ApiDocsPage() {
       <Tabs value={tab} onValueChange={setTab}>
         <TabsList>
           <TabsTrigger value="api">API Reference</TabsTrigger>
-          <TabsTrigger value="mcp">MCP Tools ({loading ? "\u2026" : tools.length})</TabsTrigger>
-          <TabsTrigger value="a2a">A2A Skills ({loading ? "\u2026" : skills.length})</TabsTrigger>
+          <TabsTrigger value="mcp">MCP Tools / MCP Reference ({loading ? "\u2026" : tools.length})</TabsTrigger>
+          <TabsTrigger value="a2a">A2A Reference ({loading ? "\u2026" : skills.length})</TabsTrigger>
+          <TabsTrigger value="readme">README</TabsTrigger>
         </TabsList>
 
         <TabsContent value="api">
           <ApiDocsPanel
-            openapiUrl="/webapi-openapi.json"
+            openapiUrl="/api/openapi.json"
             links={[
-              { label: "Swagger UI", href: "/webapi-docs" },
+              { label: "Swagger UI", href: "/api/docs" },
               { label: "MCP tools", href: `${baseOrigin}/webmcp/tools` },
               { label: "A2A health", href: `${baseOrigin}/weba2a/health` },
-              { label: "MCP Console", href: "/mcp-console" },
-              { label: "A2A Console", href: "/a2a-console" },
+              { label: "MCP Console", href: "/developer/mcp-console" },
+              { label: "A2A Console", href: "/developer/a2a-console" },
             ]}
           />
         </TabsContent>
@@ -288,7 +312,7 @@ export function ApiDocsPage() {
               <h2 className="text-lg font-semibold">A2A Skills ({skills.length})</h2>
               <p className="text-sm text-muted-foreground">
                 Live data from <code className="text-xs">{agentCardUrl}</code>. See the{" "}
-                <a href="/a2a-console" className="text-primary underline">
+                <a href="/developer/a2a-console" className="text-primary underline">
                   A2A Console
                 </a>{" "}
                 for testing.
@@ -354,7 +378,53 @@ export function ApiDocsPage() {
             </CardContent>
           </Card>
         </TabsContent>
+
+        <TabsContent value="readme">
+          <Card>
+            <CardHeader>
+              <h2 className="text-lg font-semibold">README</h2>
+              <p className="text-sm text-muted-foreground">Service README — db-mcp-server.</p>
+            </CardHeader>
+            <CardContent>
+              {/* DM-AD-04: render the README directly. Previously nested a second
+                  ApiDocsPanel here, which (a) collided on the default "api-docs"
+                  testId prefix with the api-tab panel and (b) defaulted its own
+                  inner tab to "api" so the README was never shown by default —
+                  the visible DocumentViewer resolved to the panel lacking
+                  readmeContent, hence "README content is not available". */}
+              <DocumentViewer content={README_MD} format="markdown" title="db-mcp-server" />
+            </CardContent>
+          </Card>
+        </TabsContent>
       </Tabs>
+
+      {examplePopup ? (
+        examplePopup.kind === "tool" ? (
+          <WorkedExamplePopup
+            open={true}
+            onOpenChange={(open) => !open && setExamplePopup(null)}
+            title={`MCP tool — ${examplePopup.data.name}`}
+            description={examplePopup.data.description}
+            exampleInput={{ name: examplePopup.data.name, arguments: {} }}
+            exampleOutput={{ result: "<tool output>" }}
+            endpointUrl={`${baseOrigin}/webmcp/tools/${examplePopup.data.name}`}
+            method="POST"
+            headers={{ "Content-Type": "application/json" }}
+          />
+        ) : (
+          <WorkedExamplePopup
+            open={true}
+            onOpenChange={(open) => !open && setExamplePopup(null)}
+            title={`A2A skill — ${examplePopup.data.name}`}
+            description={examplePopup.data.description}
+            exampleInput={{ skill: examplePopup.data.name, parameters: {} }}
+            exampleOutput={{ status: "completed", result: "<skill output>" }}
+            endpointUrl={`${a2aBase}/weba2a/tasks/send`}
+            method="POST"
+            headers={{ "Content-Type": "application/json" }}
+          />
+        )
+      ) : null}
     </div>
   );
 }

@@ -65,6 +65,10 @@ function asSchemaRecord(value: unknown): Record<string, unknown> | undefined {
 export function McpPage() {
   const cfg = useConfig<AppRuntimeConfig>();
   const auth = useAuth();
+  const [legacyTool, setLegacyTool] = React.useState('query_database');
+  const [legacyResult, setLegacyResult] = React.useState<unknown>(null);
+  const [legacyError, setLegacyError] = React.useState<string | null>(null);
+  const [legacyRunning, setLegacyRunning] = React.useState(false);
   const authModeLabel =
     cfg.AUTH_MODE === 'cookie' || cfg.AUTH_MODE === undefined
       ? 'browser session cookie'
@@ -73,9 +77,12 @@ export function McpPage() {
     () => requestJson(cfg.API_BASE_URL, '/api/v1/mcp/health'),
     [cfg.API_BASE_URL],
   );
-  const mcpEndpointUrl = cfg.MCP_BASE_URL ?? `${cfg.API_BASE_URL}/mcp`;
+  const mcpEndpointUrl = cfg.MCP_BASE_URL ?? `${cfg.API_BASE_URL}/api/mcp/messages`;
   const tools = useApiResource<McpToolDef[]>(
     async () => {
+      if (auth.isLoading || !auth.isAuthenticated) {
+        return [];
+      }
       const payload = await requestJson<ToolsListResponse>(mcpEndpointUrl, '', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -94,7 +101,7 @@ export function McpPage() {
           inputSchema: asSchemaRecord(tool.inputSchema),
         }));
     },
-    [mcpEndpointUrl],
+    [auth.isAuthenticated, auth.isLoading, mcpEndpointUrl],
   );
 
   // PS-72 v2 §5 / W28A-774 T.1.6: capture X-Correlation-Id / X-Request-Id response
@@ -158,6 +165,26 @@ export function McpPage() {
       : toPs72Health(health.data?.status);
 
   const boundLabel = auth.user?.username ?? auth.user?.displayName ?? 'your session';
+  const legacyToolOptions = React.useMemo(() => {
+    const names = new Set((tools.data ?? []).map((tool) => tool.name).filter(Boolean));
+    names.add('list_tables');
+    names.add('query_database');
+    return Array.from(names).sort();
+  }, [tools.data]);
+
+  const runLegacyTool = React.useCallback(async () => {
+    setLegacyRunning(true);
+    setLegacyError(null);
+    try {
+      const result = await executeTool(legacyTool, {}, '');
+      setLegacyResult(result.body);
+    } catch (error) {
+      setLegacyResult(null);
+      setLegacyError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setLegacyRunning(false);
+    }
+  }, [executeTool, legacyTool]);
 
   return (
     <PageFrame
@@ -212,6 +239,51 @@ export function McpPage() {
         title="MCP console"
         subtitle="PS-72 v2 console bound to the authenticated Web proxy."
       >
+        <div className="mb-5 rounded-md border border-slate-200 bg-white p-4">
+          <h2 className="text-lg font-semibold">MCP Test</h2>
+          <div className="mt-3 flex flex-wrap items-end gap-3">
+            <label className="text-sm font-medium text-slate-700">
+              Select tool
+              <select
+                aria-label="Select tool"
+                className="mt-1 block min-w-48 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm"
+                onChange={(event) => setLegacyTool(event.target.value)}
+                value={legacyTool}
+              >
+                {legacyToolOptions.map((tool) => (
+                  <option key={tool} value={tool}>
+                    {tool}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <button
+              className="rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white disabled:opacity-60"
+              disabled={legacyRunning || !legacyTool}
+              onClick={runLegacyTool}
+              type="button"
+            >
+              {legacyRunning ? 'Executing...' : 'Execute'}
+            </button>
+          </div>
+          {legacyError ? <ErrorState message={legacyError} /> : null}
+          {legacyResult !== null ? (
+            <div className="mt-3 space-y-2">
+              <div className="flex items-center justify-between text-sm">
+                <h3 className="font-semibold">History</h3>
+                <button className="rounded border px-2 py-1 text-xs" type="button">
+                  Copy
+                </button>
+              </div>
+              <pre className="max-h-64 overflow-auto rounded-md bg-slate-950 p-3 text-xs text-slate-50">
+                {legacyTool} @ {new Date().toLocaleTimeString()}
+                {'\n'}
+                {JSON.stringify(legacyResult, null, 2)}
+              </pre>
+            </div>
+          ) : null}
+        </div>
+        <h2 className="text-lg font-semibold">Tool catalogue</h2>
         {tools.loading ? <LoadingState label="MCP tools" /> : null}
         {tools.error ? <ErrorState message={tools.error} /> : null}
         {!tools.loading && !tools.error ? (
@@ -221,8 +293,8 @@ export function McpPage() {
             health={ps72Health}
             hasBoundKey={auth.isAuthenticated}
             boundLabel={boundLabel}
-            docsHref="/api-docs"
-            jobsHref="/jobs"
+            docsHref="/developer/api-docs"
+            jobsHref="/system/jobs"
             onExecute={executeTool}
           />
         ) : null}

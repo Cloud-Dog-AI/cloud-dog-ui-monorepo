@@ -12,7 +12,6 @@ import {
   CardHeader,
   DataTable,
   Input,
-  JsonBlock,
   Tabs,
   TabsContent,
   TabsList,
@@ -64,7 +63,7 @@ const skillColumns: DataColumn<A2ASkill>[] = [
 
 export function ApiDocsPage() {
   const cfg = useConfig<RuntimeConfig>();
-  const { api } = useGitMcpState();
+  const { api, apiKey } = useGitMcpState();
   const baseUrl = cfg.API_BASE_URL.replace(/\/$/, "");
   const mcpBase = cfg.MCP_BASE_URL.replace(/\/$/, "");
   const a2aBase = (cfg.A2A_BASE_URL ?? `${baseUrl}/a2a`).replace(/\/$/, "");
@@ -72,35 +71,59 @@ export function ApiDocsPage() {
   const [tools, setTools] = React.useState<McpTool[]>([]);
   const [skills, setSkills] = React.useState<A2ASkill[]>([]);
   const [toolError, setToolError] = React.useState<string | null>(null);
+  const [skillError, setSkillError] = React.useState<string | null>(null);
   const [search, setSearch] = React.useState("");
 
-  // Live MCP tool discovery
-  React.useEffect(() => {
-    fetch(`${mcpBase}/mcp/tools`)
-      .then((r) => r.json())
-      .then((data: Record<string, unknown>) => {
-        const list = (data.tools ?? data.items ?? []) as McpTool[];
-        setTools(Array.isArray(list) ? list : []);
-      })
-      .catch((e) => setToolError(e instanceof Error ? e.message : "Failed to load MCP tools"));
-  }, [mcpBase]);
+  const q = search.trim().toLowerCase();
+  const filteredTools = React.useMemo(
+    () => (q ? tools.filter((t) => `${t.name} ${t.description}`.toLowerCase().includes(q)) : tools),
+    [tools, q],
+  );
+  const filteredSkills = React.useMemo(
+    () => (q ? skills.filter((s) => `${s.id} ${s.name} ${s.description}`.toLowerCase().includes(q)) : skills),
+    [skills, q],
+  );
 
-  // Live A2A skill discovery
+  // GM-AD-02: live MCP tool discovery through the authenticated platform api-client (was an
+  // unauthenticated raw fetch that 401'd on the secured surface, so the tab never loaded).
   React.useEffect(() => {
-    fetch(`${a2aBase}/.well-known/agent.json`)
-      .then((r) => r.json())
-      .then((card: Record<string, unknown>) => {
+    let cancelled = false;
+    setToolError(null);
+    void (async () => {
+      try {
+        const descriptors = await api.listMcpTools(apiKey);
+        if (cancelled) return;
+        setTools(descriptors.map((d) => ({ name: d.name, description: d.description ?? "", inputSchema: d.input_schema })));
+      } catch (e) {
+        if (!cancelled) setToolError(e instanceof Error ? e.message : "Failed to load MCP tools.");
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [api, apiKey]);
+
+  // GM-AD-02: live A2A skill discovery — surface fetch failures instead of silently substituting
+  // a misleading static skill list.
+  React.useEffect(() => {
+    let cancelled = false;
+    setSkillError(null);
+    void (async () => {
+      try {
+        const resp = await fetch(`${a2aBase}/.well-known/agent.json`, {
+          credentials: "include",
+          headers: { Accept: "application/json" },
+        });
+        if (!resp.ok) throw new Error(`Agent card request failed (HTTP ${resp.status}).`);
+        const card = (await resp.json()) as Record<string, unknown>;
+        if (cancelled) return;
         const sk = (card.skills ?? []) as A2ASkill[];
         setSkills(Array.isArray(sk) ? sk : []);
-      })
-      .catch(() => {
-        // Fallback to static
-        setSkills([
-          { id: "read_file", name: "Read File", description: "Read a file from a git repository" },
-          { id: "write_file", name: "Write File", description: "Write a file to a git repository" },
-          { id: "health", name: "Health", description: "Check git-mcp health" },
-        ]);
-      });
+      } catch (e) {
+        if (cancelled) return;
+        setSkillError(e instanceof Error ? e.message : "Failed to load A2A skills.");
+        setSkills([]);
+      }
+    })();
+    return () => { cancelled = true; };
   }, [a2aBase]);
 
   return (
@@ -139,12 +162,8 @@ export function ApiDocsPage() {
         <TabsContent value="api">
           <ApiDocsPanel
             mode="swagger"
-            openapiUrl={`${baseUrl}/docs`}
-            links={[
-              { label: "OpenAPI JSON", href: `${baseUrl}/openapi.json` },
-              { label: "MCP Tools", href: `${mcpBase}/mcp/tools` },
-              { label: "A2A Agent Card", href: `${a2aBase}/.well-known/agent.json` },
-            ]}
+            openapiUrl={`${baseUrl}/openapi.json`}
+            links={[{ label: "OpenAPI JSON", href: `${baseUrl}/openapi.json` }]}
           />
         </TabsContent>
 
@@ -156,15 +175,7 @@ export function ApiDocsPage() {
             </CardHeader>
             <CardContent className="space-y-4">
               {toolError ? <p className="text-sm text-destructive">{toolError}</p> : null}
-              <DataTable columns={toolColumns} rows={tools} emptyMessage="No MCP tools discovered." getRowId={(r) => r.name} tableId="git-mcp-tools" columnPickerEnabled pageSize={25} />
-              {tools.length > 0 ? (
-                <div className="space-y-3">
-                  <h3 className="text-sm font-semibold">Tool Schemas</h3>
-                  {tools.slice(0, 5).map((tool) => (
-                    <JsonBlock key={tool.name} title={tool.name} value={tool} defaultCollapsed />
-                  ))}
-                </div>
-              ) : null}
+              <DataTable columns={toolColumns} rows={filteredTools} emptyMessage="No MCP tools discovered." getRowId={(r) => r.name} tableId="git-mcp-tools" columnPickerEnabled pageSize={25} />
             </CardContent>
           </Card>
         </TabsContent>
@@ -173,10 +184,11 @@ export function ApiDocsPage() {
           <Card>
             <CardHeader>
               <h2 className="text-lg font-semibold">A2A Skills</h2>
-              <p className="text-sm text-muted-foreground">Fetched from <code className="text-xs">{a2aBase}/.well-known/agent.json</code>.</p>
+              <p className="text-sm text-muted-foreground">Fetched from <code className="text-xs">{a2aBase}/.well-known/agent.json</code>. Per-skill documentation (id, name, description) for every advertised A2A skill.</p>
             </CardHeader>
-            <CardContent>
-              <DataTable columns={skillColumns} rows={skills} emptyMessage="No A2A skills discovered." getRowId={(r) => r.id} tableId="git-a2a-skills" />
+            <CardContent className="space-y-4">
+              {skillError ? <p className="text-sm text-destructive">{skillError}</p> : null}
+              <DataTable columns={skillColumns} rows={filteredSkills} emptyMessage="No A2A skills discovered." getRowId={(r) => r.id} tableId="git-a2a-skills" columnPickerEnabled pageSize={25} />
             </CardContent>
           </Card>
         </TabsContent>

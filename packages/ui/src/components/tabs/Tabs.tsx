@@ -36,29 +36,44 @@ export function TabsList(props: React.HTMLAttributes<HTMLDivElement>) {
   return <div {...props} role="tablist" className={cn("inline-flex rounded-md bg-muted p-1", props.className)} />;
 }
 
-export function TabsTrigger(props: { value: string; children: React.ReactNode }) {
+export type TabsTriggerProps = Omit<React.ButtonHTMLAttributes<HTMLButtonElement>, "value" | "type" | "role" | "aria-selected"> & {
+  value: string;
+};
+
+export function TabsTrigger({ value, className, children, onClick, ...buttonProps }: TabsTriggerProps) {
   const ctx = React.useContext(TabsContext);
   if (!ctx) throw new Error("TabsContext missing");
-  const active = ctx.value === props.value;
+  const active = ctx.value === value;
   return (
     <button
+      {...buttonProps}
       type="button"
       role="tab"
       aria-selected={active}
       className={cn(
         "px-3 py-1.5 text-sm rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-        active ? "bg-background shadow-sm" : "text-muted-foreground hover:text-foreground"
+        active ? "bg-background shadow-sm" : "text-slate-700 hover:text-foreground",
+        className,
       )}
-      onClick={() => ctx.setValue(props.value)}
+      onClick={(event) => {
+        onClick?.(event);
+        if (!event.defaultPrevented) {
+          ctx.setValue(value);
+        }
+      }}
     >
-      {props.children}
+      {children}
     </button>
   );
 }
 
-export function TabsContent(props: { value: string; children: React.ReactNode }) {
+export type TabsContentProps = React.HTMLAttributes<HTMLDivElement> & {
+  value: string;
+};
+
+export function TabsContent({ value, children, className, ...divProps }: TabsContentProps) {
   const ctx = React.useContext(TabsContext);
   if (!ctx) throw new Error("TabsContext missing");
-  const active = ctx.value === props.value;
-  return active ? <div role="tabpanel" className="mt-4">{props.children}</div> : null;
+  const active = ctx.value === value;
+  return active ? <div {...divProps} role="tabpanel" className={cn("mt-4", className)}>{children}</div> : null;
 }

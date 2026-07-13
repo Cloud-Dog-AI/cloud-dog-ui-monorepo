@@ -1,0 +1,7 @@
+# Build output (synced into chart-mcp-server/ui/dist for Docker bundling)
+dist/
+# Playwright artefacts (committed as lane evidence under chart-mcp-server, not here)
+test-results/
+playwright-report/
+# Saved auth session (contains a live session cookie — never commit)
+tests/.auth/

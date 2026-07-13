@@ -34,6 +34,10 @@ export type A2aConsoleProps = Readonly<{
   endpointUrl: string;
   onSend: (topic: string, payload: unknown) => Promise<unknown>;
   topics?: readonly string[];
+  /** CX-131: selected skill/topic from the left agent-card panel. */
+  initialTopic?: string;
+  /** CX-131: parameter defaults derived from the selected skill inputSchema. */
+  initialPayload?: unknown;
   className?: string;
 }>;
 
@@ -42,6 +46,18 @@ export function A2aConsole(props: A2aConsoleProps) {
   const [payloadText, setPayloadText] = React.useState("{}");
   const [sending, setSending] = React.useState(false);
   const [history, setHistory] = React.useState<HistoryEntry[]>([]);
+
+  React.useEffect(() => {
+    if (props.initialTopic !== undefined) {
+      setTopic(props.initialTopic);
+    }
+  }, [props.initialTopic]);
+
+  React.useEffect(() => {
+    if (props.initialPayload !== undefined) {
+      setPayloadText(JSON.stringify(props.initialPayload, null, 2));
+    }
+  }, [props.initialPayload]);
 
   const send = async () => {
     if (!topic.trim()) return;

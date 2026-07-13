@@ -19,13 +19,24 @@ import { useAuth } from "@cloud-dog/auth";
 import { Badge, Button, Card, CardContent, CardHeader, DataTable, EntityDialog, Input, RelatedItemsPanel, RelativeTime } from "@cloud-dog/ui";
 import type { BulkAction, DataColumn, EntityFieldDef } from "@cloud-dog/ui";
 import { isAdminUser } from "../lib/rbac";
-import type { ChatProfileRecord, McpServer } from "../lib/types";
+import type { AgentStrategyName, ChatProfileRecord, McpServer } from "../lib/types";
 import { useAppState } from "../state/AppState";
+
+const agentStrategyOptions: AgentStrategyName[] = [
+  "simple",
+  "react",
+  "codeact",
+  "subagent_router",
+  "rlm",
+  "reflexion",
+  "longworkflow",
+];
 
 const profileFields: EntityFieldDef[] = [
   { name: "profile_id", label: "Profile ID", type: "text", required: true },
   { name: "name", label: "Name", type: "text", required: true },
   { name: "description", label: "Description", type: "text", required: false },
+  { name: "agent_strategy", label: "Agent strategy", type: "select", required: false, options: agentStrategyOptions },
   { name: "mcp_server_indices", label: "External service indices (CSV)", type: "text", required: false },
   { name: "llm_model", label: "LLM model", type: "text", required: false },
   { name: "llm_system_prompt", label: "System prompt", type: "text", required: false },
@@ -44,6 +55,7 @@ const emptyForm = {
   profile_id: "",
   name: "",
   description: "",
+  agent_strategy: "simple",
   mcp_server_indices: "",
   llm_model: "",
   llm_system_prompt: "",
@@ -63,6 +75,13 @@ function parseIndexCsv(value: unknown): number[] {
     .split(",")
     .map((item) => Number(item.trim()))
     .filter((item, index, all) => Number.isInteger(item) && item >= 0 && all.indexOf(item) === index);
+}
+
+function normalizeAgentStrategyName(value: unknown): AgentStrategyName {
+  const candidate = String(value ?? "").trim().toLowerCase();
+  return agentStrategyOptions.includes(candidate as AgentStrategyName)
+    ? (candidate as AgentStrategyName)
+    : "simple";
 }
 
 function toBindingIndices(profile: ChatProfileRecord, servers: McpServer[]): number[] {
@@ -116,6 +135,7 @@ function toForm(profile: ChatProfileRecord | null, servers: McpServer[]): Record
     profile_id: profile.profile_id,
     name: profile.name,
     description: profile.description,
+    agent_strategy: normalizeAgentStrategyName(defaults.agent_strategy),
     mcp_server_indices: toBindingIndices(profile, servers).join(", "),
     llm_model: String(defaults.llm_model ?? defaults.model ?? ""),
     llm_system_prompt: String(defaults.llm_system_prompt ?? defaults.system_prompt ?? ""),
@@ -212,6 +232,7 @@ export function ProfilesPage() {
           ...(existing?.session_defaults ?? {}),
           llm_model: String(form.llm_model ?? "").trim(),
           llm_system_prompt: String(form.llm_system_prompt ?? "").trim(),
+          agent_strategy: normalizeAgentStrategyName(form.agent_strategy),
           memory_enabled: String(form.memory_enabled ?? "true").trim().toLowerCase() !== "false",
           cache_enabled: String(form.cache_enabled ?? "true").trim().toLowerCase() !== "false",
           history_enabled: String(form.history_enabled ?? "true").trim().toLowerCase() !== "false",
@@ -278,7 +299,7 @@ export function ProfilesPage() {
     if (!trimmed) return profiles;
     return profiles.filter((row) => {
       const defaults = row.session_defaults ?? {};
-      return `${row.profile_id} ${row.name} ${row.description} ${String(defaults.llm_model ?? defaults.model ?? "")}`
+      return `${row.profile_id} ${row.name} ${row.description} ${String(defaults.llm_model ?? defaults.model ?? "")} ${normalizeAgentStrategyName(defaults.agent_strategy)}`
         .toLowerCase()
         .includes(trimmed);
     });
@@ -308,6 +329,13 @@ export function ProfilesPage() {
         const indices = toBindingIndices(row, mcpServers);
         return indices.length ? indices.join(", ") : "none";
       },
+    },
+    {
+      id: "agent_strategy",
+      header: "Strategy",
+      sortable: true,
+      sortValue: (row) => normalizeAgentStrategyName(row.session_defaults.agent_strategy),
+      cell: (row) => <Badge variant="secondary">{normalizeAgentStrategyName(row.session_defaults.agent_strategy)}</Badge>,
     },
     {
       id: "llm_model",

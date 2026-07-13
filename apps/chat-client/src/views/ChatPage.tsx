@@ -33,6 +33,7 @@ import {
 import type { DataColumn } from "@cloud-dog/ui";
 import type { FileArtifactPreview, TimelineMessage } from "@cloud-dog/ui";
 import { useRightDrawer } from "@cloud-dog/shell";
+import { useAuth } from "@cloud-dog/auth";
 import type { ChatApi } from "../lib/api";
 import {
   buildReferencePath,
@@ -41,8 +42,12 @@ import {
   isFileArtifactToolResult,
   resolveFileIntake,
 } from "../lib/file-intake";
+import { isReadOnlyUser } from "../lib/rbac";
 import { useAppState } from "../state/AppState";
-import type { ChatProfileRecord, FileIntakeSettings, McpServer, SessionSummary, ToolExecutionResult, TranscriptEvent } from "../lib/types";
+import { mediaResultFromHit } from "../lib/media";
+import type { MediaResult } from "../lib/media";
+import { MediaResultList } from "../components/MediaInline";
+import type { ChatProfileRecord, FileIntakeSettings, LlmTestResult, McpServer, SessionSummary, ToolExecutionResult, TranscriptEvent } from "../lib/types";
 
 type FileArtifactKind = "attachment" | "upload" | "download" | "reference";
 
@@ -220,6 +225,23 @@ function buildReferencePromptText(text: string, references: PendingReference[]):
   return `${text}\n\nFile references provided through the file external service:\n${refList}`;
 }
 
+/**
+ * Extract any inline-renderable media (image/video/audio/PDF) from a tool
+ * result so the conversation thread can render it via the shared @cloud-dog/ui
+ * multimodal components (W28F-948 D2). Returns [] for non-media results.
+ */
+function extractMediaResults(data: Record<string, unknown>, idBase: string): MediaResult[] {
+  const result = (data.result ?? data) as Record<string, unknown>;
+  const candidates: unknown[] = Array.isArray((result as Record<string, unknown>).hits)
+    ? ((result as Record<string, unknown>).hits as unknown[])
+    : Array.isArray((result as Record<string, unknown>).media)
+      ? ((result as Record<string, unknown>).media as unknown[])
+      : [result];
+  return candidates
+    .map((c, i) => mediaResultFromHit(c, `${idBase}-${i}`))
+    .filter((m): m is MediaResult => m !== null);
+}
+
 function parseTranscript(events: TranscriptEvent[]): ParsedTranscript {
   const messages: ChatTimelineMessage[] = [];
   const toolResults: ToolExecutionResult[] = [];
@@ -368,6 +390,17 @@ function parseTranscript(events: TranscriptEvent[]): ParsedTranscript {
               description: `Produced by ${call.toolName} through the authenticated external service proxy.`,
             },
           ],
+        });
+      }
+
+      const mediaItems = extractMediaResults(event.data ?? {}, `tr-${event.sequence ?? messages.length}`);
+      if (mediaItems.length > 0) {
+        messages.push({
+          id: `tm-${event.sequence ?? messages.length}`,
+          role: "tool",
+          content: `Tool ${call.toolName} returned ${mediaItems.length === 1 ? "a media result" : `${mediaItems.length} media results`}.`,
+          timestamp: event.timestamp,
+          footer: <MediaResultList items={mediaItems} />,
         });
       }
     }
@@ -535,11 +568,16 @@ export function ChatPage() {
     refreshMcpServers,
     profiles,
   } = useAppState();
+  const auth = useAuth();
+  const readOnlyUser = isReadOnlyUser(auth.user);
 
   const drawer = useRightDrawer();
 
   const [messages, setMessages] = React.useState<ChatTimelineMessage[]>([]);
   const [toolPanels, setToolPanels] = React.useState<ToolExecutionResult[]>([]);
+  // CL-30 (W28E-1876): LLM/model reachability test action.
+  const [modelTesting, setModelTesting] = React.useState(false);
+  const [modelTestResult, setModelTestResult] = React.useState<LlmTestResult | null>(null);
   const [input, setInput] = React.useState("");
   const [pendingAttachments, setPendingAttachments] = React.useState<PendingAttachment[]>([]);
   const [pendingReferences, setPendingReferences] = React.useState<PendingReference[]>([]);
@@ -689,7 +727,7 @@ export function ChatPage() {
       setInput("");
       await awaitSelectedServerIndicesSync();
 
-      if (createdSessionId && effectiveSelectedIndices.length > 0) {
+      if (createdSessionId && effectiveSelectedIndices.length > 0 && !readOnlyUser) {
         await api.setSessionPreferences(sessionId, effectiveSelectedIndices);
       } else if (expandedSelection) {
         await setSelectedServerIndices(effectiveSelectedIndices);
@@ -836,10 +874,22 @@ export function ChatPage() {
     }
   };
 
+  // CL-25 (W28E-1876): show the logged-in user's name (not the raw "user" role)
+  // in the header of their own messages, falling back gracefully.
+  const userDisplayName = React.useMemo(
+    () =>
+      auth.user?.displayName?.trim() ||
+      auth.user?.username?.trim() ||
+      auth.user?.email?.trim() ||
+      "You",
+    [auth.user]
+  );
+
   const renderedMessages = React.useMemo(
     () =>
       messages.map((message) => ({
         ...message,
+        displayName: message.role === "user" ? userDisplayName : undefined,
         footer:
           message.artifacts && message.artifacts.length > 0 ? (
             <div className="space-y-2">
@@ -855,7 +905,7 @@ export function ChatPage() {
             </div>
           ) : undefined,
       })),
-    [activeSessionId, api, fileServerIndex, messages]
+    [activeSessionId, api, fileServerIndex, messages, userDisplayName]
   );
 
   const [selectedProfileId, setSelectedProfileId] = React.useState<string>("");
@@ -952,6 +1002,28 @@ export function ChatPage() {
     URL.revokeObjectURL(url);
   }, [activeSessionId, messages]);
 
+  // CL-30 (W28E-1876): probe the configured LLM/model with a minimal completion
+  // and surface success/model/latency (or the error) inline, so a user can
+  // verify the model responds before starting a real conversation.
+  const handleTestModel = React.useCallback(async () => {
+    setModelTesting(true);
+    setModelTestResult(null);
+    try {
+      const result = await api.testModel();
+      setModelTestResult(result);
+    } catch (err) {
+      setModelTestResult({
+        ok: false,
+        model: "",
+        provider: "",
+        latency_ms: 0,
+        error: err instanceof Error ? err.message : "Model test failed",
+      });
+    } finally {
+      setModelTesting(false);
+    }
+  }, [api]);
+
   return (
     <div className="space-y-4">
       <Card>
@@ -965,6 +1037,15 @@ export function ChatPage() {
               </p>
             </div>
             <div className="flex flex-wrap gap-2">
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => void handleTestModel()}
+                disabled={modelTesting}
+                data-testid="chat-test-model"
+              >
+                {modelTesting ? "Testing model…" : "Test model"}
+              </Button>
               <Button variant="secondary" size="sm" onClick={() => drawer.toggle()}>
                 {drawer.isOpen ? "Hide activity" : "Show activity"}
               </Button>
@@ -975,6 +1056,23 @@ export function ChatPage() {
               ) : null}
             </div>
           </div>
+          {modelTestResult ? (
+            <p
+              role="status"
+              data-testid="chat-model-test-result"
+              className={
+                modelTestResult.ok
+                  ? "mt-2 text-xs text-emerald-700"
+                  : "mt-2 text-xs text-destructive"
+              }
+            >
+              {modelTestResult.ok
+                ? `Model OK — ${modelTestResult.model || "configured model"} responded in ${modelTestResult.latency_ms} ms${
+                    modelTestResult.sample ? ` ("${modelTestResult.sample}")` : ""
+                  }`
+                : `Model test failed — ${modelTestResult.error || "no response from the configured model"}`}
+            </p>
+          ) : null}
         </CardHeader>
         <CardContent className="space-y-3">
           <div className="space-y-3 rounded-md border p-3" data-testid="chat-session-table">
@@ -1043,9 +1141,20 @@ export function ChatPage() {
               </div>
 
               <div className="space-y-2 rounded-md border p-3">
-                <p className="text-sm font-medium">Recent tool calls</p>
+                <div className="flex items-center justify-between gap-2">
+                  <p className="text-sm font-medium">Recent tool calls</p>
+                  {toolPanels.length > 0 ? (
+                    <span className="text-[11px] text-muted-foreground" data-testid="tool-calls-count">
+                      {toolPanels.length} recorded
+                    </span>
+                  ) : null}
+                </div>
                 {toolPanels.length === 0 ? (
-                  <p className="text-xs text-muted-foreground">Tool calls appear here when external services are used.</p>
+                  <p className="text-xs text-muted-foreground" data-testid="tool-calls-empty">
+                    {selectedServerIndices.length === 0
+                      ? "No external services are selected for this session. Select one above, then each tool the assistant runs — with its arguments and result — is recorded here."
+                      : "No tool calls yet. When the assistant invokes a selected external service, each call — with its arguments and result — is recorded here."}
+                  </p>
                 ) : (
                   toolPanels.slice(0, 4).map((panel) => (
                     <div key={`${panel.timestamp}-${panel.serverIndex}-${panel.toolName}`}>

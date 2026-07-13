@@ -414,7 +414,7 @@ export function ServicesPage() {
           { label: 'Detail', onClick: (service) => void openDetail(service) },
           { label: 'Health Check', onClick: (service) => void checkHealth(service) },
           { label: 'Edit', onClick: openEdit },
-          { label: 'History', onClick: (service) => navigate(`/admin/monitoring?surface=audit&query=${encodeURIComponent(service.name)}`) },
+          { label: 'History', onClick: (service) => navigate(`/audit-log?surface=audit&query=${encodeURIComponent(service.name)}`) },
           { label: 'Delete', variant: 'destructive', onClick: (service) => void deleteService(service) },
         ] : undefined}
         searchText={(service) => [service.name, service.service_type ?? '', service.endpoint_url ?? service.base_url ?? '', service.health_status ?? '', healthLabel(service, healthResults), ...bindingSummary(service.id)].join(' ')}
@@ -570,7 +570,7 @@ export function ServicesPage() {
                   {bindingSummary(selectedService.id).map((item) => <p key={item}>{item}</p>)}
                 </div>
               </div>
-              <Button type="button" variant="secondary" onClick={() => navigate(`/admin/monitoring?surface=audit&query=${encodeURIComponent(selectedService.name)}`)}>
+              <Button type="button" variant="secondary" onClick={() => navigate(`/audit-log?surface=audit&query=${encodeURIComponent(selectedService.name)}`)}>
                 <ExternalLink className="h-4 w-4" aria-hidden="true" /> Open service logs
               </Button>
             </div>
